@@ -1,0 +1,11 @@
+--extra-index-url https://download.pytorch.org/whl/cu129
+opencv-python>=4.9
+numpy>=1.26
+scipy>=1.11
+torch==2.8.0+cu129
+torchvision==0.23.0+cu129
+ultralytics>=8.2
+pillow>=10.0
+sounddevice>=0.4
+fastapi>=0.115
+uvicorn[standard]>=0.30

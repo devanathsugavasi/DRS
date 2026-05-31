@@ -1,0 +1,197 @@
+"""YOLOv8 cricket ball detection with OpenCV annotation and exports."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Optional
+
+import cv2
+import numpy as np
+
+from config.settings import (
+    DETECTIONS_DIR,
+    INFERENCE_DEVICE,
+    USE_TENSORRT,
+    YOLO_CONF_THRESH,
+    YOLO_IMG_SIZE,
+    YOLO_IOU_THRESH,
+    YOLO_MODEL_PATH,
+)
+from utils.helpers import draw_bounding_box, save_csv, save_json, timestamp_str
+from utils.logger import get_logger
+
+log = get_logger("ball_detector")
+COCO_SPORTS_BALL_CLASS_ID = 32
+
+
+@dataclass(slots=True)
+class BallDetection:
+    frame_id: int
+    timestamp_ms: float
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+    confidence: float
+    camera_id: int = 0
+    cx: int = field(init=False)
+    cy: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.cx = (self.x1 + self.x2) // 2
+        self.cy = (self.y1 + self.y2) // 2
+
+    @property
+    def bbox(self) -> tuple[int, int, int, int]:
+        return self.x1, self.y1, self.x2, self.y2
+
+
+@dataclass(slots=True)
+class DetectionResult:
+    frame_id: int
+    timestamp_ms: float
+    camera_id: int
+    detections: list[BallDetection]
+    inference_ms: float
+
+    @property
+    def best(self) -> Optional[BallDetection]:
+        return max(self.detections, key=lambda item: item.confidence) if self.detections else None
+
+
+class FramePreprocessor:
+    """Contrast and sharpening tuned for outdoor cricket footage."""
+
+    def __init__(self) -> None:
+        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        self._kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
+
+    def __call__(self, frame: np.ndarray) -> np.ndarray:
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        lightness, a, b = cv2.split(lab)
+        lightness = self._clahe.apply(lightness)
+        enhanced = cv2.cvtColor(cv2.merge((lightness, a, b)), cv2.COLOR_LAB2BGR)
+        return cv2.filter2D(enhanced, -1, self._kernel)
+
+
+class BallDetector:
+    """Detect red or white cricket balls using a fine-tuned YOLOv8 model."""
+
+    def __init__(
+        self,
+        model_path: Path | str = YOLO_MODEL_PATH,
+        device: str = INFERENCE_DEVICE,
+        export_results: bool = True,
+    ) -> None:
+        self.device = device
+        self.export_results = export_results
+        self.preprocessor = FramePreprocessor()
+        self.model: Any = None
+        self.using_coco_fallback = False
+        self.results_log: list[dict[str, Any]] = []
+        self._load_model(Path(model_path))
+
+    def _load_model(self, model_path: Path) -> None:
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            log.warning("ultralytics is not installed; detector will return empty results")
+            return
+
+        if model_path.exists():
+            self.model = YOLO(str(model_path))
+            log.info("Loaded cricket ball model from %s", model_path)
+        else:
+            self.model = YOLO("yolov8n.pt")
+            self.using_coco_fallback = True
+            log.warning("Custom model missing; using YOLOv8n COCO sports-ball fallback")
+
+        if USE_TENSORRT:
+            try:
+                self.model.export(format="engine", half=True, simplify=True)
+            except Exception as exc:
+                log.warning("TensorRT export failed: %s", exc)
+
+    def detect(
+        self,
+        frame: np.ndarray,
+        frame_id: int,
+        timestamp_ms: float,
+        camera_id: int = 0,
+        preprocess: bool = True,
+    ) -> DetectionResult:
+        if self.model is None:
+            return DetectionResult(frame_id, timestamp_ms, camera_id, [], 0.0)
+
+        input_frame = self.preprocessor(frame) if preprocess else frame
+        started = time.perf_counter()
+        raw_results = self.model.predict(
+            source=input_frame,
+            conf=YOLO_CONF_THRESH,
+            iou=YOLO_IOU_THRESH,
+            imgsz=YOLO_IMG_SIZE,
+            device=self.device,
+            verbose=False,
+        )
+        inference_ms = (time.perf_counter() - started) * 1000.0
+
+        detections: list[BallDetection] = []
+        for result in raw_results:
+            for box in result.boxes:
+                class_id = int(box.cls[0])
+                if self.using_coco_fallback and class_id != COCO_SPORTS_BALL_CLASS_ID:
+                    continue
+                x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
+                detections.append(
+                    BallDetection(frame_id, timestamp_ms, x1, y1, x2, y2, float(box.conf[0]), camera_id)
+                )
+
+        detections.sort(key=lambda item: item.confidence, reverse=True)
+        output = DetectionResult(frame_id, timestamp_ms, camera_id, detections, inference_ms)
+        if self.export_results:
+            self.results_log.extend(self._rows(output))
+        return output
+
+    def annotate(self, frame: np.ndarray, result: DetectionResult) -> np.ndarray:
+        for detection in result.detections:
+            color = (0, 245, 255) if detection is result.best else (80, 220, 120)
+            draw_bounding_box(frame, detection.bbox, f"ball {detection.confidence:.2f}", color)
+            cv2.circle(frame, (detection.cx, detection.cy), 4, (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.putText(frame, f"{result.inference_ms:.1f} ms", (12, frame.shape[0] - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (230, 230, 230), 1)
+        return frame
+
+    def flush(self, fmt: str = "json", stem: str | None = None) -> Path:
+        stem = stem or timestamp_str()
+        path = DETECTIONS_DIR / f"detections_{stem}.{fmt.lower()}"
+        if fmt.lower() == "csv":
+            save_csv(self.results_log, path)
+        else:
+            save_json(self.results_log, path)
+        self.results_log.clear()
+        return path
+
+    def _rows(self, result: DetectionResult) -> list[dict[str, Any]]:
+        rows = []
+        for detection in result.detections:
+            row = asdict(detection)
+            row["inference_ms"] = result.inference_ms
+            rows.append(row)
+        if not rows:
+            rows.append(
+                {
+                    "frame_id": result.frame_id,
+                    "timestamp_ms": result.timestamp_ms,
+                    "camera_id": result.camera_id,
+                    "x1": None,
+                    "y1": None,
+                    "x2": None,
+                    "y2": None,
+                    "confidence": 0.0,
+                    "cx": None,
+                    "cy": None,
+                    "inference_ms": result.inference_ms,
+                }
+            )
+        return rows

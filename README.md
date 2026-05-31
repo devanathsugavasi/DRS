@@ -1,0 +1,91 @@
+# Cricket DRS Prototype
+
+This workspace contains a modular Python/OpenCV cricket DRS prototype covering:
+
+- synchronized 2-6 camera capture with timestamped frames
+- instant replay buffers, playback controls, slow motion, and frame stepping
+- efficient OpenCV `VideoWriter` recording
+- YOLOv8 cricket ball detection with JSON/CSV export
+- Kalman-filter ball tracking, trajectory drawing, velocity, and direction
+- checkerboard camera calibration and pitch-plane homography support
+- software synchronization verification, dropped-frame reporting, and flash sync hooks
+- projectile trajectory prediction and LBW decision suggestions
+- audio FFT edge detection with video timestamp alignment
+- Tkinter umpire dashboard for live review
+
+## Install
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+The requirements are configured for the local RTX GPU using PyTorch CUDA 12.9 wheels. For a CPU-only machine, remove the `torch` and `torchvision` CUDA pins from `requirements.txt` and let `ultralytics` install the default CPU wheels.
+
+Place a trained cricket ball model at:
+
+```text
+models/cricket_ball_yolov8.pt
+```
+
+If the custom model is absent, the detector falls back to YOLOv8n's COCO `sports ball` class.
+
+## Run Dashboard
+
+```powershell
+python drs_app.py --cameras 0,1 --record
+```
+
+## Electron Broadcast Dashboard
+
+```powershell
+cd dashboard\electron
+npm install
+npm start
+```
+
+The Electron shell connects to the Python backend at `http://127.0.0.1:8765`.
+It now provides an enterprise DRS command-center layout with live camera review, appeal presets, decision analytics, system monitoring, pitch map, 3D trajectory canvas, trend charts, replay controls, logs, and WebSocket backend health.
+
+Start the backend first:
+
+```powershell
+cd C:\Users\nikhi\OneDrive\Desktop\DRS
+.\.venv\Scripts\Activate.ps1
+python drs_app.py --api --cameras 0,1,2,3,4,5 --record
+```
+
+Then start Electron in a second terminal:
+
+```powershell
+cd C:\Users\nikhi\OneDrive\Desktop\DRS\dashboard\electron
+npm start
+```
+
+The backend exposes:
+
+- `GET /api/cameras` for camera IDs and health
+- `GET /api/presets/NO_BALL`, `/api/presets/LBW`, `/api/presets/EDGE`
+- `GET /api/live/{camera_id}.jpg` for latest live frame
+- `POST /api/replay/create` to snapshot the replay buffer
+- `POST /api/replay/request` with `{ "camera_ids": [0, 2], "frame_index": 123 }` for synced multi-camera replay metadata
+- `GET /api/replay/{camera_id}.jpg?frame_index=123`
+- `WS /ws/status` for sync and camera health
+
+Electron uses the WebSocket to show backend connection/sync status and uses `/api/replay/request` so all selected cameras are aligned to the same replay timestamp for appeal review.
+
+## Run Headless OpenCV Mode
+
+```powershell
+python drs_app.py --cameras 0,1 --headless --seconds 120
+```
+
+Recordings, detections, tracking exports, audio events, and calibration files are written under `data/`.
+
+## Production Notes
+
+- Use global shutter/high-FPS cameras where possible.
+- Prefer hardware trigger or genlock in production; this project includes software timestamp alignment and optional flash detection for lower-cost deployments.
+- Train YOLOv8 on red and white balls under real match lighting, including motion blur, shadows, pitch wear, and crowd backgrounds.
+- For LBW-grade accuracy, feed the trajectory engine with calibrated multi-camera 3D reconstruction rather than the approximate pixel-to-world helper.
