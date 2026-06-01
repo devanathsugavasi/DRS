@@ -97,6 +97,7 @@ def create_testing_app() -> FastAPI:
             "csv": "csv",
             "pdf": "pdf",
             "video": "analyzed_video",
+            "animation": "animation_video",
         }
         key = key_map.get(export_name)
         if key is None or key not in exports:

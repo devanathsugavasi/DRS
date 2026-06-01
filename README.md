@@ -98,6 +98,25 @@ Open `http://127.0.0.1:5174`.
 
 Full architecture, API design, database design, source layout, and deployment notes are in `docs/DRS_TESTING_PLATFORM.md`.
 
+Create a Windows desktop launcher:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\create_testing_platform_shortcut.ps1
+```
+
+Windows blocks fully automatic taskbar pinning for normal apps, so after the shortcut is created, right-click `Cricket DRS Testing Platform` on the desktop and choose **Pin to taskbar**.
+
+## Accuracy Workflow
+
+For reliable ball tracking, train a cricket-specific model on your own footage:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_yolo_drs.py --epochs 120 --imgsz 1280 --device 0
+.\.venv\Scripts\python.exe scripts\evaluate_yolo_drs.py --model models\training_runs\drs_yolov8\weights\best.pt
+```
+
+See `docs/ACCURACY_PLAYBOOK.md` for camera calibration, training data, reliability gates, and clean DRS animation guidance.
+
 ## Run Headless OpenCV Mode
 
 ```powershell

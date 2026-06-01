@@ -14,10 +14,12 @@ from typing import Any
 import cv2
 import numpy as np
 
-from core.ball_detector import BallDetection, DetectionResult, BallDetector
+from core.ball_detector import DetectionResult, BallDetector
 from core.ball_tracker import BallTracker, TrackPoint
 from core.lbw import LBWDecisionEngine
+from core.tracking_quality import TrackingQualityAnalyzer
 from core.trajectory import TrajectoryPredictor
+
 TESTING_DATA_DIR = Path("data/testing")
 UPLOAD_DIR = TESTING_DATA_DIR / "uploads"
 OUTPUT_DIR = TESTING_DATA_DIR / "outputs"
@@ -50,6 +52,7 @@ class DeliveryTestingPipeline:
         self.detector = BallDetector(model_path=model_path, export_results=False)
         self.trajectory = TrajectoryPredictor()
         self.lbw = LBWDecisionEngine()
+        self.quality = TrackingQualityAnalyzer()
 
     def process(self, job_id: str, video_paths: list[Path], options: AnalysisOptions) -> dict[str, Any]:
         if len(video_paths) not in {1, 2}:
@@ -67,6 +70,7 @@ class DeliveryTestingPipeline:
         sync = self._synchronize(camera_results) if len(camera_results) == 2 else None
         fused = self._fuse_tracks(camera_results)
         decision = self._build_decision(fused, camera_results, bool(sync))
+        animation_path = self._write_clean_drs_animation(job_dir, job_id, fused, decision)
         report_path = self._write_report(job_dir, job_id, camera_results, decision, sync)
         json_path = self._write_json(job_dir, job_id, camera_results, decision, sync)
         csv_path = self._write_csv(job_dir, job_id, all_tracks)
@@ -83,6 +87,7 @@ class DeliveryTestingPipeline:
                 "csv": str(csv_path),
                 "pdf": str(report_path),
                 "analyzed_video": camera_results[0]["analyzed_video"],
+                "animation_video": str(animation_path),
                 "screenshots": [item for cam in camera_results for item in cam["screenshots"]],
             },
             "calibration_status": {
@@ -169,6 +174,7 @@ class DeliveryTestingPipeline:
         cap.release()
         writer.release()
         tracks = [asdict(point) for point in tracker.history]
+        quality = self.quality.evaluate(detections, tracks)
         speed_px_s = float(np.median([point["speed_px_s"] for point in tracks])) if tracks else 0.0
         pixels_per_meter = max(25.0, width / 20.12)
         speed_kmh = (speed_px_s / pixels_per_meter) * 3.6
@@ -188,7 +194,8 @@ class DeliveryTestingPipeline:
             "bounce_point_px": list(bounce_point_px) if bounce_point_px else None,
             "impact_point_px": list(impact_point_px) if impact_point_px else None,
             "screenshots": screenshots,
-            "confidence": self._confidence(detections, tracks),
+            "confidence": quality.score,
+            "tracking_quality": quality.to_dict(),
         }
 
     def _detect_ball(
@@ -288,9 +295,15 @@ class DeliveryTestingPipeline:
         avg_conf = float(np.mean([cam["confidence"] for cam in camera_results])) if camera_results else 0.0
         ball_speed = float(np.mean([cam["ball_speed_kmh"] for cam in camera_results])) if camera_results else 0.0
         main = camera_results[0]
-        hit_probability = min(0.96, max(0.05, avg_conf + (0.12 if dual else 0.0)))
+        reliability_boost = 0.12 if dual else 0.0
+        if fused_tracks:
+            recent_confidence = float(np.mean([item.get("confidence", 0.0) for item in fused_tracks[-12:]]))
+            avg_conf = (avg_conf * 0.65) + (recent_confidence * 0.35)
+        hit_probability = min(0.96, max(0.05, avg_conf + reliability_boost))
         hitting = hit_probability >= 0.62 and main.get("impact_point_px") is not None
         decision = "OUT" if hitting else "NOT OUT"
+        quality = [cam.get("tracking_quality", {}) for cam in camera_results]
+        reliability = "high" if hit_probability >= 0.78 and all(item.get("reliability") == "high" for item in quality) else "medium" if hit_probability >= 0.58 else "low"
         return {
             "ball_speed_kmh": round(ball_speed, 2),
             "pitching_location": main.get("bounce_point_px") or "unknown",
@@ -299,11 +312,84 @@ class DeliveryTestingPipeline:
             "lbw_recommendation": decision,
             "confidence_score": round(hit_probability, 3),
             "uncertainty": round(1.0 - hit_probability, 3),
+            "reliability": reliability,
+            "tracking_quality": quality,
             "notes": [
                 "Single-camera mode estimates depth approximately; dual-camera mode improves confidence after calibration.",
-                "Bat, pad, and stump detections use fallback geometry until dedicated YOLO classes are trained.",
+                "Bat, pad, and stump detections use fallback geometry unless a dedicated multi-class YOLO model is trained.",
+                "Use high-FPS side-on and stump-line cameras for serious LBW testing.",
             ],
         }
+
+    def _write_clean_drs_animation(self, job_dir: Path, job_id: str, tracks: list[dict[str, Any]], decision: dict[str, Any]) -> Path:
+        path = job_dir / "clean_drs_animation.mp4"
+        width, height, fps = 1280, 720, 30
+        writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+        pitch_left, pitch_right = 210, 1070
+        pitch_top, pitch_bottom = 120, 620
+        crease_x = int(pitch_right - 120)
+        stump_x = int(pitch_right - 70)
+        center_y = (pitch_top + pitch_bottom) // 2
+
+        normalized = self._normalize_track_for_animation(tracks, pitch_left, pitch_right, pitch_top, pitch_bottom)
+        frames = max(90, len(normalized) * 3)
+        for frame_idx in range(frames):
+            canvas = np.zeros((height, width, 3), dtype=np.uint8)
+            canvas[:] = (10, 35, 24)
+            for y in range(0, height, 42):
+                cv2.rectangle(canvas, (0, y), (width, y + 21), (14, 48, 31), -1)
+            cv2.rectangle(canvas, (pitch_left, pitch_top), (pitch_right, pitch_bottom), (75, 105, 76), -1)
+            cv2.rectangle(canvas, (pitch_left, pitch_top), (pitch_right, pitch_bottom), (160, 190, 170), 2)
+            cv2.line(canvas, (crease_x, pitch_top), (crease_x, pitch_bottom), (220, 230, 210), 2)
+            self._draw_animation_stumps(canvas, stump_x, center_y)
+
+            upto = min(len(normalized), max(1, frame_idx // 3))
+            visible = normalized[:upto]
+            if len(visible) > 1:
+                cv2.polylines(canvas, [np.array(visible, dtype=np.int32)], False, (60, 255, 140), 4, cv2.LINE_AA)
+                glow = np.array(visible, dtype=np.int32)
+                cv2.polylines(canvas, [glow], False, (30, 150, 255), 1, cv2.LINE_AA)
+            if visible:
+                cv2.circle(canvas, visible[-1], 10, (245, 245, 245), -1, cv2.LINE_AA)
+                cv2.circle(canvas, visible[-1], 16, (60, 255, 140), 2, cv2.LINE_AA)
+
+            self._draw_animation_panel(canvas, decision)
+            writer.write(canvas)
+        writer.release()
+        return path
+
+    def _normalize_track_for_animation(
+        self,
+        tracks: list[dict[str, Any]],
+        left: int,
+        right: int,
+        top: int,
+        bottom: int,
+    ) -> list[tuple[int, int]]:
+        if not tracks:
+            return [(left + 70, bottom - 80), (right - 90, (top + bottom) // 2)]
+        pts = np.array([[float(item["x"]), float(item["y"])] for item in tracks], dtype=float)
+        min_xy = pts.min(axis=0)
+        span = np.maximum(pts.max(axis=0) - min_xy, 1.0)
+        normalized = (pts - min_xy) / span
+        x = left + normalized[:, 0] * (right - left - 120) + 40
+        y = bottom - normalized[:, 1] * (bottom - top - 80) - 40
+        return [(int(px), int(py)) for px, py in zip(x, y)]
+
+    def _draw_animation_stumps(self, canvas: np.ndarray, x: int, y: int) -> None:
+        for offset in (-18, 0, 18):
+            cv2.line(canvas, (x + offset, y - 76), (x + offset, y + 76), (235, 228, 190), 7, cv2.LINE_AA)
+        cv2.line(canvas, (x - 27, y - 82), (x + 27, y - 82), (235, 228, 190), 4, cv2.LINE_AA)
+
+    def _draw_animation_panel(self, canvas: np.ndarray, decision: dict[str, Any]) -> None:
+        cv2.rectangle(canvas, (36, 36), (490, 180), (4, 12, 28), -1)
+        cv2.rectangle(canvas, (36, 36), (490, 180), (60, 255, 140), 1)
+        result = decision.get("lbw_recommendation", "PENDING")
+        color = (60, 80, 255) if result == "OUT" else (50, 205, 255)
+        cv2.putText(canvas, "CLEAN DRS ANIMATION", (58, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (225, 238, 255), 2)
+        cv2.putText(canvas, result, (58, 130), cv2.FONT_HERSHEY_SIMPLEX, 1.55, color, 3, cv2.LINE_AA)
+        confidence = int(float(decision.get("confidence_score", 0.0)) * 100)
+        cv2.putText(canvas, f"CONF {confidence}% | {decision.get('reliability', 'low').upper()}", (58, 164), cv2.FONT_HERSHEY_SIMPLEX, 0.64, (60, 255, 140), 2)
 
     def _confidence(self, detections: list[dict[str, Any]], tracks: list[dict[str, Any]]) -> float:
         if not detections:

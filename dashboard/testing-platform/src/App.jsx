@@ -168,11 +168,13 @@ function App() {
             <div className="video-grid">
               <VideoPane title="Original Video" file={files[0]} />
               <VideoPane title="Ball Tracking + Trajectory Overlay" src={result ? exportUrl("video") : null} />
+              <VideoPane title="Clean DRS Animation" src={result ? exportUrl("animation") : null} />
             </div>
             <div className="evidence-grid">
               <Metric label="Bounce Point" value={formatPoint(summary?.pitching_location)} />
               <Metric label="Impact Point" value={formatPoint(summary?.impact_location)} />
               <Metric label="Stump Collision" value={summary?.predicted_wicket_impact || "waiting"} />
+              <Metric label="Reliability" value={summary?.reliability || "waiting"} />
               <Metric label="Slow Motion Replay" value={result ? "generated" : "waiting"} />
               <Metric label="Frame Review" value={result ? `${result.cameras?.[0]?.frames_processed || 0} frames` : "waiting"} />
               <Metric label="Sync Confidence" value={result?.sync ? `${Math.round(result.sync.confidence * 100)}%` : "single camera"} />
@@ -194,14 +196,29 @@ function App() {
             <Metric label="Pitching Location" value={formatPoint(summary?.pitching_location)} />
             <Metric label="Impact Location" value={formatPoint(summary?.impact_location)} />
             <Metric label="Uncertainty" value={summary ? `${Math.round(summary.uncertainty * 100)}%` : "--"} />
+            <Metric label="Tracking Reliability" value={summary?.reliability || "--"} />
           </Panel>
 
           <Panel title="Export Features" icon={<Download size={18} />}>
             <div className="export-grid">
               <ExportButton href={exportUrl("video")} disabled={!result} icon={<Video size={16} />} label="Analyzed Video" />
+              <ExportButton href={exportUrl("animation")} disabled={!result} icon={<Video size={16} />} label="Clean DRS Animation" />
               <ExportButton href={exportUrl("pdf")} disabled={!result} icon={<FileText size={16} />} label="DRS Report PDF" />
               <ExportButton href={exportUrl("json")} disabled={!result} icon={<FileJson size={16} />} label="Tracking JSON" />
               <ExportButton href={exportUrl("csv")} disabled={!result} icon={<FileText size={16} />} label="Tracking CSV" />
+            </div>
+          </Panel>
+
+          <Panel title="Accuracy Gates" icon={<Activity size={18} />}>
+            <div className="quality-list">
+              {(summary?.tracking_quality || []).map((item, index) => (
+                <div className="quality-card" key={index}>
+                  <strong>Camera {index + 1}: {item.reliability || "unknown"}</strong>
+                  <span>Detection {Math.round((item.detection_rate || 0) * 100)}% | Jitter {item.jitter_px || 0}px</span>
+                  {(item.warnings || []).map((warning) => <p key={warning}>{warning}</p>)}
+                </div>
+              ))}
+              {!summary && <span className="muted">Quality gates appear after analysis.</span>}
             </div>
           </Panel>
 

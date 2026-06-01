@@ -260,7 +260,7 @@ p {
   height: min(56vh, 540px);
   min-height: 300px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -382,6 +382,29 @@ p {
 
 .readiness .warn {
   color: #ffd15a;
+}
+
+.quality-list {
+  display: grid;
+  gap: 9px;
+}
+
+.quality-card {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.quality-card span, .muted {
+  color: #aebfda;
+}
+
+.quality-card p {
+  color: #ffd15a;
+  font-size: 12px;
 }
 
 .bottom-bar {
