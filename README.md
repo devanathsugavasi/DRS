@@ -111,9 +111,11 @@ Windows blocks fully automatic taskbar pinning for normal apps, so after the sho
 For reliable ball tracking, train a cricket-specific model on your own footage:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\train_yolo_drs.py --epochs 120 --imgsz 1280 --device 0
+.\.venv\Scripts\python.exe scripts\train_yolo_drs.py --base-model yolo11l.pt --epochs 120 --imgsz 1280 --device 0
 .\.venv\Scripts\python.exe scripts\evaluate_yolo_drs.py --model models\training_runs\drs_yolov8\weights\best.pt
 ```
+
+The detector selector prefers local `models/yolo11x.pt`, then `models/yolo11l.pt`, then `models/yolov8x.pt`, then `models/cricket_ball_yolov8.pt`. It does not claim tournament readiness unless model mAP, ball recall, calibration, sync, tracking, replay FPS, and decision confidence pass the readiness gates.
 
 See `docs/ACCURACY_PLAYBOOK.md` for camera calibration, training data, reliability gates, and clean DRS animation guidance.
 

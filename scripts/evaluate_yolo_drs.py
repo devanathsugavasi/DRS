@@ -27,11 +27,22 @@ def main() -> None:
         "map50_95": float(metrics.box.map),
         "precision": float(metrics.box.mp),
         "recall": float(metrics.box.mr),
+        "ball_recall": float(metrics.box.mr),
+        "inference_ms": float(getattr(metrics, "speed", {}).get("inference", 0.0)) if hasattr(metrics, "speed") else None,
         "decision_ready": float(metrics.box.map50) >= args.min_map50,
     }
+    summary["decision_ready"] = summary["decision_ready"] and summary["ball_recall"] >= args.min_ball_map50
     out = Path("models/model_evaluation.json")
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    existing = {}
+    if out.exists():
+        try:
+            existing = json.loads(out.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            existing = {}
+    existing[Path(args.model).name] = summary
+    existing[args.model] = summary
+    out.write_text(json.dumps(existing, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
     if not summary["decision_ready"]:
         raise SystemExit("Model is not accurate enough for reliable DRS testing yet.")

@@ -19,6 +19,7 @@ from config.settings import (
     YOLO_IOU_THRESH,
     YOLO_MODEL_PATH,
 )
+from core.model_selector import DetectorModelSelector, ModelReadiness
 from utils.helpers import draw_bounding_box, save_csv, save_json, timestamp_str
 from utils.logger import get_logger
 
@@ -89,26 +90,30 @@ class BallDetector:
         self.export_results = export_results
         self.preprocessor = FramePreprocessor()
         self.model: Any = None
+        self.model_readiness: ModelReadiness | None = None
         self.using_coco_fallback = False
         self.results_log: list[dict[str, Any]] = []
-        self._load_model(Path(model_path))
+        default_path = Path(YOLO_MODEL_PATH)
+        requested_path = Path(model_path) if model_path else None
+        self._load_model(None if requested_path == default_path else requested_path)
 
-    def _load_model(self, model_path: Path) -> None:
+    def _load_model(self, model_path: Path | None) -> None:
         try:
             from ultralytics import YOLO
         except ImportError:
             log.warning("ultralytics is not installed; detector will return empty results")
             return
 
-        if model_path.exists():
-            self.model = YOLO(str(model_path))
-            log.info("Loaded cricket ball model from %s", model_path)
+        selected_path, readiness = DetectorModelSelector().select(model_path)
+        self.model_readiness = readiness
+        if selected_path.exists():
+            self.model = YOLO(str(selected_path))
+            log.info("Loaded %s detector from %s", readiness.detector_family, selected_path)
         else:
-            self.model = YOLO("yolov8n.pt")
-            self.using_coco_fallback = True
-            log.warning("Custom model missing; using YOLOv8n COCO sports-ball fallback")
+            self.model = None
+            log.warning("No local detector model found; add YOLO11x/YOLO11l/YOLOv8x/custom cricket model")
 
-        if USE_TENSORRT:
+        if USE_TENSORRT and self.model is not None:
             try:
                 self.model.export(format="engine", half=True, simplify=True)
             except Exception as exc:

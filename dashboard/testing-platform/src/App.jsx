@@ -177,7 +177,8 @@ function App() {
               <Metric label="Reliability" value={summary?.reliability || "waiting"} />
               <Metric label="Slow Motion Replay" value={result ? "generated" : "waiting"} />
               <Metric label="Frame Review" value={result ? `${result.cameras?.[0]?.frames_processed || 0} frames` : "waiting"} />
-              <Metric label="Sync Confidence" value={result?.sync ? `${Math.round(result.sync.confidence * 100)}%` : "single camera"} />
+              <Metric label="Sync Error" value={formatMs(result?.sync_status?.sync_error_ms)} />
+              <Metric label="Replay FPS" value={result?.sync_status?.replay_fps ? `${result.sync_status.replay_fps} fps` : "--"} />
             </div>
           </Panel>
         </section>
@@ -197,6 +198,7 @@ function App() {
             <Metric label="Impact Location" value={formatPoint(summary?.impact_location)} />
             <Metric label="Uncertainty" value={summary ? `${Math.round(summary.uncertainty * 100)}%` : "--"} />
             <Metric label="Tracking Reliability" value={summary?.reliability || "--"} />
+            <Metric label="Failed Gates" value={summary?.gate?.failed_gates?.length ? summary.gate.failed_gates.join(", ") : "none"} />
           </Panel>
 
           <Panel title="Export Features" icon={<Download size={18} />}>
@@ -214,7 +216,8 @@ function App() {
               {(summary?.tracking_quality || []).map((item, index) => (
                 <div className="quality-card" key={index}>
                   <strong>Camera {index + 1}: {item.reliability || "unknown"}</strong>
-                  <span>Detection {Math.round((item.detection_rate || 0) * 100)}% | Jitter {item.jitter_px || 0}px</span>
+                  <span>Coverage {Math.round((item.detection_coverage || 0) * 100)}% | Max gap {item.max_missing_gap || 0} | Smooth {Math.round((item.trajectory_smoothness || 0) * 100)}%</span>
+                  <span>Avg conf {Math.round((item.mean_confidence || 0) * 100)}% | Jump rejects {item.jump_rejections || 0}</span>
                   {(item.warnings || []).map((warning) => <p key={warning}>{warning}</p>)}
                 </div>
               ))}
@@ -223,8 +226,9 @@ function App() {
           </Panel>
 
           <Panel title="Readiness" icon={<CheckCircle2 size={18} />}>
-            <Readiness title="Camera Calibration" item={result?.calibration_status} />
-            <Readiness title="YOLO Training Quality" item={result?.model_status} />
+            <Readiness title="Detector Model" item={result?.model_status} type="model" />
+            <Readiness title="Camera Calibration" item={result?.calibration_status} type="calibration" />
+            <Readiness title="Camera Sync / Replay" item={result?.sync_status} type="sync" />
           </Panel>
         </aside>
       </section>
@@ -285,22 +289,50 @@ function ExportButton({ href, disabled, icon, label }) {
   );
 }
 
-function Readiness({ title, item }) {
+function Readiness({ title, item, type }) {
+  const usable = Boolean(item?.usable);
   return (
     <div className="readiness">
       <strong>{title}</strong>
-      <span className={item?.production_ready ? "good" : "warn"}>
-        {item ? (item.production_ready ? "Production ready" : "Testing only") : "Waiting"}
+      <span className={usable ? "good" : "warn"}>
+        {item ? (usable ? "Usable" : "Not ready") : "Waiting"}
       </span>
-      <p>{item?.message || "Run an analysis to see readiness status."}</p>
+      <ReadinessMetrics item={item} type={type} />
+      <p>{item?.reason || item?.message || "Run an analysis to see readiness status."}</p>
     </div>
   );
+}
+
+function ReadinessMetrics({ item, type }) {
+  if (!item) return null;
+  if (type === "model") {
+    return <small>mAP50 {fmtPct(item.map50)} | Ball recall {fmtPct(item.ball_recall)} | Precision {fmtPct(item.precision)}</small>;
+  }
+  if (type === "calibration") {
+    return <small>Reproj {fmtNum(item.reprojection_error_px)}px | Homography {fmtNum(item.homography_error_cm)}cm | Pitch {fmtNum(item.pitch_coordinate_error_cm)}cm</small>;
+  }
+  if (type === "sync") {
+    return <small>Sync {formatMs(item.sync_error_ms)} | Replay {item.replay_fps || "--"} fps | Drops {item.dropped_frames ?? "--"}</small>;
+  }
+  return null;
 }
 
 function formatPoint(point) {
   if (!point) return "--";
   if (Array.isArray(point)) return `${Math.round(point[0])}, ${Math.round(point[1])} px`;
   return String(point);
+}
+
+function formatMs(value) {
+  return value === null || value === undefined ? "--" : `${Number(value).toFixed(2)} ms`;
+}
+
+function fmtPct(value) {
+  return value === null || value === undefined ? "--" : `${Math.round(Number(value) * 100)}%`;
+}
+
+function fmtNum(value) {
+  return value === null || value === undefined ? "--" : Number(value).toFixed(2);
 }
 
 createRoot(document.getElementById("root")).render(<App />);

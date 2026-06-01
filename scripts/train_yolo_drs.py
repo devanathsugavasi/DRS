@@ -9,7 +9,7 @@ from pathlib import Path
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train YOLOv8 for cricket DRS objects")
     parser.add_argument("--data", default="training/drs_yolo_dataset.yaml", help="YOLO data YAML")
-    parser.add_argument("--base-model", default="yolov8s.pt", help="YOLO starting model")
+    parser.add_argument("--base-model", default="yolo11l.pt", help="YOLO starting model; use local YOLO11x/YOLO11l when possible")
     parser.add_argument("--epochs", type=int, default=120)
     parser.add_argument("--imgsz", type=int, default=1280)
     parser.add_argument("--batch", type=int, default=8)

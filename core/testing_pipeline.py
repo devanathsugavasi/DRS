@@ -14,9 +14,10 @@ from typing import Any
 import cv2
 import numpy as np
 
+from core.ball_association import AssociatedTrackPoint, SingleBallByteTracker
 from core.ball_detector import DetectionResult, BallDetector
-from core.ball_tracker import BallTracker, TrackPoint
 from core.lbw import LBWDecisionEngine
+from core.readiness import ReadinessGate
 from core.tracking_quality import TrackingQualityAnalyzer
 from core.trajectory import TrajectoryPredictor
 
@@ -48,11 +49,12 @@ class ObjectEstimate:
 class DeliveryTestingPipeline:
     """Processes uploaded cricket delivery clips into DRS-style evidence."""
 
-    def __init__(self, model_path: Path | str = Path("models/cricket_ball_yolov8.pt")) -> None:
+    def __init__(self, model_path: Path | str | None = None) -> None:
         self.detector = BallDetector(model_path=model_path, export_results=False)
         self.trajectory = TrajectoryPredictor()
         self.lbw = LBWDecisionEngine()
         self.quality = TrackingQualityAnalyzer()
+        self.readiness = ReadinessGate()
 
     def process(self, job_id: str, video_paths: list[Path], options: AnalysisOptions) -> dict[str, Any]:
         if len(video_paths) not in {1, 2}:
@@ -69,7 +71,10 @@ class DeliveryTestingPipeline:
 
         sync = self._synchronize(camera_results) if len(camera_results) == 2 else None
         fused = self._fuse_tracks(camera_results)
-        decision = self._build_decision(fused, camera_results, bool(sync))
+        replay_fps = min([cam["fps"] for cam in camera_results], default=0.0)
+        calibration = self.readiness.calibration()
+        sync_readiness = self.readiness.sync(sync, replay_fps)
+        decision = self._build_decision(fused, camera_results, bool(sync), calibration, sync_readiness)
         animation_path = self._write_clean_drs_animation(job_dir, job_id, fused, decision)
         report_path = self._write_report(job_dir, job_id, camera_results, decision, sync)
         json_path = self._write_json(job_dir, job_id, camera_results, decision, sync)
@@ -90,16 +95,10 @@ class DeliveryTestingPipeline:
                 "animation_video": str(animation_path),
                 "screenshots": [item for cam in camera_results for item in cam["screenshots"]],
             },
-            "calibration_status": {
-                "ready_for_testing": True,
-                "production_ready": False,
-                "message": "Camera calibration code exists, but real DRS accuracy needs checkerboard captures from the exact match cameras and pitch.",
-            },
-            "model_status": {
-                "ready_for_testing": self.detector.model is not None,
-                "production_ready": False,
-                "message": "YOLO model is loadable, but tournament-grade accuracy needs training/validation on your red and white ball footage.",
-            },
+            "calibration_status": calibration.to_dict(),
+            "sync_status": sync_readiness.to_dict(),
+            "model_status": self.detector.model_readiness.to_dict() if self.detector.model_readiness else {},
+            "readiness_gates": decision["gate"],
         }
 
     def _process_camera(
@@ -118,7 +117,7 @@ class DeliveryTestingPipeline:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1280)
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 720)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        tracker = BallTracker(fps=fps)
+        tracker = SingleBallByteTracker(fps=fps)
         output_path = job_dir / f"camera_{camera_id}_analyzed.mp4"
         writer = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
 
@@ -173,7 +172,7 @@ class DeliveryTestingPipeline:
 
         cap.release()
         writer.release()
-        tracks = [asdict(point) for point in tracker.history]
+        tracks = [point.to_dict() for point in tracker.history]
         quality = self.quality.evaluate(detections, tracks)
         speed_px_s = float(np.median([point["speed_px_s"] for point in tracks])) if tracks else 0.0
         pixels_per_meter = max(25.0, width / 20.12)
@@ -196,6 +195,8 @@ class DeliveryTestingPipeline:
             "screenshots": screenshots,
             "confidence": quality.score,
             "tracking_quality": quality.to_dict(),
+            "real_detection_count": sum(1 for point in tracks if point.get("real_detection")),
+            "kalman_gap_fill_count": sum(1 for point in tracks if point.get("predicted")),
         }
 
     def _detect_ball(
@@ -219,7 +220,7 @@ class DeliveryTestingPipeline:
         bat = ObjectEstimate("bat", (int(w * 0.38), int(h * 0.35), int(w * 0.45), int(h * 0.84)), 0.20, "geometry_fallback")
         return [stumps, pads, bat]
 
-    def _estimate_bounce(self, points: list[TrackPoint]) -> tuple[int, int] | None:
+    def _estimate_bounce(self, points: list[AssociatedTrackPoint]) -> tuple[int, int] | None:
         if len(points) < 5:
             return None
         velocities = np.array([point.vy for point in points], dtype=float)
@@ -230,7 +231,7 @@ class DeliveryTestingPipeline:
         point = points[int(candidates[0])]
         return int(point.x), int(point.y)
 
-    def _estimate_impact(self, points: list[TrackPoint], pads: ObjectEstimate | None) -> tuple[int, int] | None:
+    def _estimate_impact(self, points: list[AssociatedTrackPoint], pads: ObjectEstimate | None) -> tuple[int, int] | None:
         if not points or pads is None or pads.bbox is None:
             return None
         x1, y1, x2, y2 = pads.bbox
@@ -262,11 +263,15 @@ class DeliveryTestingPipeline:
     def _synchronize(self, camera_results: list[dict[str, Any]]) -> dict[str, Any]:
         frame_delta = abs(camera_results[0]["frames_processed"] - camera_results[1]["frames_processed"])
         fps_delta = abs(camera_results[0]["fps"] - camera_results[1]["fps"])
+        replay_fps = min(camera_results[0]["fps"], camera_results[1]["fps"])
+        sync_error_ms = frame_delta * (1000.0 / max(1.0, replay_fps))
         confidence = max(0.35, 1.0 - (frame_delta * 0.01) - (fps_delta * 0.05))
         return {
             "method": "software_timestamp_alignment",
             "frame_delta": frame_delta,
             "fps_delta": round(fps_delta, 3),
+            "sync_error_ms": round(sync_error_ms, 3),
+            "dropped_frames": frame_delta,
             "confidence": round(confidence, 3),
         }
 
@@ -291,7 +296,14 @@ class DeliveryTestingPipeline:
             )
         return fused
 
-    def _build_decision(self, fused_tracks: list[dict[str, Any]], camera_results: list[dict[str, Any]], dual: bool) -> dict[str, Any]:
+    def _build_decision(
+        self,
+        fused_tracks: list[dict[str, Any]],
+        camera_results: list[dict[str, Any]],
+        dual: bool,
+        calibration: Any,
+        sync_readiness: Any,
+    ) -> dict[str, Any]:
         avg_conf = float(np.mean([cam["confidence"] for cam in camera_results])) if camera_results else 0.0
         ball_speed = float(np.mean([cam["ball_speed_kmh"] for cam in camera_results])) if camera_results else 0.0
         main = camera_results[0]
@@ -301,23 +313,30 @@ class DeliveryTestingPipeline:
             avg_conf = (avg_conf * 0.65) + (recent_confidence * 0.35)
         hit_probability = min(0.96, max(0.05, avg_conf + reliability_boost))
         hitting = hit_probability >= 0.62 and main.get("impact_point_px") is not None
-        decision = "OUT" if hitting else "NOT OUT"
+        proposed_decision = "OUT" if hitting else "NOT OUT"
         quality = [cam.get("tracking_quality", {}) for cam in camera_results]
         reliability = "high" if hit_probability >= 0.78 and all(item.get("reliability") == "high" for item in quality) else "medium" if hit_probability >= 0.58 else "low"
+        model = self.detector.model_readiness.to_dict() if self.detector.model_readiness else {}
+        gate = self.readiness.evaluate(proposed_decision, hit_probability, model, quality, calibration, sync_readiness)
         return {
             "ball_speed_kmh": round(ball_speed, 2),
             "pitching_location": main.get("bounce_point_px") or "unknown",
             "impact_location": main.get("impact_point_px") or "unknown",
             "predicted_wicket_impact": "hitting" if hitting else "missing/uncertain",
-            "lbw_recommendation": decision,
+            "raw_lbw_recommendation": proposed_decision,
+            "lbw_recommendation": gate.display_decision,
             "confidence_score": round(hit_probability, 3),
             "uncertainty": round(1.0 - hit_probability, 3),
             "reliability": reliability,
             "tracking_quality": quality,
+            "gate": gate.to_dict(),
+            "model_metrics": model,
+            "calibration_metrics": calibration.to_dict(),
+            "sync_metrics": sync_readiness.to_dict(),
             "notes": [
-                "Single-camera mode estimates depth approximately; dual-camera mode improves confidence after calibration.",
-                "Bat, pad, and stump detections use fallback geometry unless a dedicated multi-class YOLO model is trained.",
-                "Use high-FPS side-on and stump-line cameras for serious LBW testing.",
+                "OUT/NOT OUT is hidden unless model, calibration, tracking, sync, replay FPS, and confidence gates pass.",
+                "Kalman-filled points are marked as predictions and do not count as real ball detections.",
+                "Use local YOLO11x/YOLO11l when available; otherwise the selector falls back to local YOLOv8x/custom model files.",
             ],
         }
 
@@ -335,13 +354,17 @@ class DeliveryTestingPipeline:
         frames = max(90, len(normalized) * 3)
         for frame_idx in range(frames):
             canvas = np.zeros((height, width, 3), dtype=np.uint8)
-            canvas[:] = (10, 35, 24)
+            canvas[:] = (8, 18, 24)
+            cv2.rectangle(canvas, (0, 0), (width, height), (15, 28, 40), -1)
             for y in range(0, height, 42):
-                cv2.rectangle(canvas, (0, y), (width, y + 21), (14, 48, 31), -1)
-            cv2.rectangle(canvas, (pitch_left, pitch_top), (pitch_right, pitch_bottom), (75, 105, 76), -1)
+                cv2.rectangle(canvas, (0, y), (width, y + 21), (18, 54, 36), -1)
+            for x in range(pitch_left, pitch_right, 52):
+                cv2.line(canvas, (x, pitch_top), (x, pitch_bottom), (62, 90, 76), 1)
+            cv2.rectangle(canvas, (pitch_left, pitch_top), (pitch_right, pitch_bottom), (66, 97, 71), -1)
             cv2.rectangle(canvas, (pitch_left, pitch_top), (pitch_right, pitch_bottom), (160, 190, 170), 2)
             cv2.line(canvas, (crease_x, pitch_top), (crease_x, pitch_bottom), (220, 230, 210), 2)
             self._draw_animation_stumps(canvas, stump_x, center_y)
+            cv2.putText(canvas, "PITCH MAP", (pitch_left, pitch_top - 22), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (210, 235, 255), 2)
 
             upto = min(len(normalized), max(1, frame_idx // 3))
             visible = normalized[:upto]
@@ -385,11 +408,15 @@ class DeliveryTestingPipeline:
         cv2.rectangle(canvas, (36, 36), (490, 180), (4, 12, 28), -1)
         cv2.rectangle(canvas, (36, 36), (490, 180), (60, 255, 140), 1)
         result = decision.get("lbw_recommendation", "PENDING")
-        color = (60, 80, 255) if result == "OUT" else (50, 205, 255)
+        color = (60, 80, 255) if result == "OUT" else (50, 205, 255) if result == "NOT OUT" else (0, 215, 255)
         cv2.putText(canvas, "CLEAN DRS ANIMATION", (58, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (225, 238, 255), 2)
-        cv2.putText(canvas, result, (58, 130), cv2.FONT_HERSHEY_SIMPLEX, 1.55, color, 3, cv2.LINE_AA)
+        font_scale = 1.05 if len(result) > 14 else 1.55
+        cv2.putText(canvas, result, (58, 130), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 3, cv2.LINE_AA)
         confidence = int(float(decision.get("confidence_score", 0.0)) * 100)
         cv2.putText(canvas, f"CONF {confidence}% | {decision.get('reliability', 'low').upper()}", (58, 164), cv2.FONT_HERSHEY_SIMPLEX, 0.64, (60, 255, 140), 2)
+        failed = decision.get("gate", {}).get("failed_gates", [])
+        if failed:
+            cv2.putText(canvas, "FAILED GATES: " + ", ".join(failed[:3]), (520, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 215, 255), 2)
 
     def _confidence(self, detections: list[dict[str, Any]], tracks: list[dict[str, Any]]) -> float:
         if not detections:
@@ -431,11 +458,18 @@ class DeliveryTestingPipeline:
                 ("Job ID", job_id),
                 ("Mode", "Dual Camera" if len(cameras) == 2 else "Single Camera"),
                 ("LBW Recommendation", decision["lbw_recommendation"]),
+                ("Raw Recommendation", decision.get("raw_lbw_recommendation", "unknown")),
                 ("Confidence", f"{decision['confidence_score']:.0%}"),
+                ("Failed Gates", ", ".join(decision.get("gate", {}).get("failed_gates", [])) or "none"),
                 ("Ball Speed", f"{decision['ball_speed_kmh']} km/h"),
                 ("Pitching", str(decision["pitching_location"])),
                 ("Impact", str(decision["impact_location"])),
                 ("Wicket Impact", decision["predicted_wicket_impact"]),
+                ("Model mAP50", str(decision.get("model_metrics", {}).get("map50"))),
+                ("Ball Recall", str(decision.get("model_metrics", {}).get("ball_recall"))),
+                ("Calibration Reprojection px", str(decision.get("calibration_metrics", {}).get("reprojection_error_px"))),
+                ("Homography Error cm", str(decision.get("calibration_metrics", {}).get("homography_error_cm"))),
+                ("Sync Error ms", str(decision.get("sync_metrics", {}).get("sync_error_ms"))),
                 ("Sync", json.dumps(sync) if sync else "single camera"),
             ]:
                 pdf.drawString(42, y, f"{label}: {value}")

@@ -26,6 +26,18 @@ This project now has the software structure for serious DRS testing, but high ac
 
 Without this, single-camera trajectory depth is only an approximation.
 
+After validation, write the measured readiness metrics:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\write_calibration_readiness.py `
+  --reprojection-error-px 1.10 `
+  --homography-error-cm 3.5 `
+  --pitch-coordinate-error-cm 4.0 `
+  --per-camera-json "{""cam0"":{""reprojection_error_px"":1.05},""cam1"":{""reprojection_error_px"":1.14}}"
+```
+
+The platform will not show `OUT`, `NOT OUT`, or `UMPIRE'S CALL` unless calibration metrics pass the configured thresholds.
+
 ## YOLO Dataset Requirements
 
 Train a multi-class model with:
@@ -63,13 +75,28 @@ Copy-Item models\training_runs\drs_yolov8\weights\best.pt models\cricket_ball_yo
 
 ## Reliability Levels
 
-The testing platform now reports tracking reliability:
+The testing platform now reports measurable tracking reliability:
 
 - `high`: usable for strong testing evidence
 - `medium`: useful for review, but not final
 - `low`: do not trust the decision; improve camera angle, lighting, or model
 
+The score includes detection coverage, max missing gap, trajectory smoothness, jump rejection, and average confidence. Kalman-filled points are shown as predictions and do not count as real ball detections.
+
 For actual match decisions, treat any low or medium reliability result as "needs human/operator review".
+
+## Decision Gates
+
+The UI displays `REVIEW INCONCLUSIVE` unless all gates pass:
+
+- model mAP50 >= 0.88
+- ball recall >= 0.90
+- calibration reprojection error <= 1.5 px
+- homography validation error <= 5 cm
+- tracking reliability is medium/high with max missing gap <= 5 frames
+- sync error <= 8 ms
+- replay FPS >= 24
+- decision confidence >= 70%
 
 ## Clean DRS Animation
 
