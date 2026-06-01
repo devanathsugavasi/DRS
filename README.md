@@ -75,6 +75,29 @@ The backend exposes:
 
 Electron uses the WebSocket to show backend connection/sync status and uses `/api/replay/request` so all selected cameras are aligned to the same replay timestamp for appeal review.
 
+## Offline DRS Testing Platform
+
+Use this to upload one delivery video or two synchronized camera-angle videos and generate a DRS-style test analysis without live cameras.
+
+Start the testing backend:
+
+```powershell
+cd C:\Users\nikhi\OneDrive\Desktop\DRS
+.\.venv\Scripts\python.exe drs_app.py --testing-api --host 127.0.0.1 --port 8766
+```
+
+Start the React/Tailwind frontend:
+
+```powershell
+cd C:\Users\nikhi\OneDrive\Desktop\DRS\dashboard\testing-platform
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5174`.
+
+Full architecture, API design, database design, source layout, and deployment notes are in `docs/DRS_TESTING_PLATFORM.md`.
+
 ## Run Headless OpenCV Mode
 
 ```powershell

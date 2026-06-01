@@ -16,11 +16,15 @@ data/tracking/
 data/sync/
 data/audio/
 data/calibration/
+data/testing/
 
 dashboard/electron/node_modules/
 dashboard/electron/dist/
 dashboard/electron/out/
 dashboard/electron/.vite/
+dashboard/testing-platform/node_modules/
+dashboard/testing-platform/dist/
+dashboard/testing-platform/.vite/
 
 models/.cache/
 models/best.pt

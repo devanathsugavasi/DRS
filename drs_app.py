@@ -62,6 +62,7 @@ def main() -> None:
     parser.add_argument("--list-cameras", action="store_true", help="Scan available camera indices and exit")
     parser.add_argument("--scan-limit", type=int, default=10, help="Number of camera indices to scan")
     parser.add_argument("--api", action="store_true", help="Run FastAPI backend for Electron dashboard")
+    parser.add_argument("--testing-api", action="store_true", help="Run offline upload-based DRS testing API")
     parser.add_argument("--host", default="127.0.0.1", help="API host")
     parser.add_argument("--port", type=int, default=8765, help="API port")
     args = parser.parse_args()
@@ -71,7 +72,11 @@ def main() -> None:
         return
 
     camera_ids = parse_camera_ids(args.cameras)
-    if args.api:
+    if args.testing_api:
+        from core.testing_api import run_testing_api
+
+        run_testing_api(args.host, args.port)
+    elif args.api:
         from core.api_server import run_api
 
         run_api(camera_ids, args.record, args.host, args.port)
