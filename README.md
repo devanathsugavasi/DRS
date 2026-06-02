@@ -152,8 +152,18 @@ Otherwise the system reports `REVIEW INCONCLUSIVE`.
 
 ## Tests
 
+Install package in editable mode, then run tests:
+
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests -v
+pip install -e .
+pytest tests/ -v --tb=short
+```
+
+Or from venv:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m pytest tests/ -v --tb=short
 ```
 
 ## Documentation
