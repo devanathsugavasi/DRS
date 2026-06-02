@@ -15,7 +15,7 @@ from config.settings import (
     MAX_MISSING_FRAMES,
     TRAJECTORY_HISTORY,
 )
-from core.ball_detector import BallDetection, DetectionResult
+from core.ball_detector import DetectionResult
 from utils.helpers import draw_trajectory
 
 
