@@ -204,6 +204,9 @@ See `TESTING_GUIDE.md` for detailed troubleshooting and performance tips.
 
 ## Documentation
 
+- `QUICK_START.md` - Step-by-step testing with video (2 minutes)
+- `CAMERA_GUIDE.md` - Camera hardware requirements and options
+- `TESTING_GUIDE.md` - Advanced troubleshooting and performance
 - `docs/ACCURACY_PLAYBOOK.md`
 - `docs/DRS_TESTING_PLATFORM.md`
 
