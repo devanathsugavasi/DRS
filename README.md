@@ -21,7 +21,11 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-The requirements are configured for the local RTX GPU using PyTorch CUDA 12.9 wheels. For a CPU-only machine, remove the `torch` and `torchvision` CUDA pins from `requirements.txt` and let `ultralytics` install the default CPU wheels.
+For RTX/CUDA GPU installs:
+
+```powershell
+pip install -r requirements-gpu.txt
+```
 
 Place a trained cricket ball model at:
 
@@ -51,15 +55,13 @@ It now provides an enterprise DRS command-center layout with live camera review,
 Start the backend first:
 
 ```powershell
-cd C:\Users\nikhi\OneDrive\Desktop\DRS
-.\.venv\Scripts\Activate.ps1
 python drs_app.py --api --cameras 0,1,2,3,4,5 --record
 ```
 
 Then start Electron in a second terminal:
 
 ```powershell
-cd C:\Users\nikhi\OneDrive\Desktop\DRS\dashboard\electron
+cd dashboard\electron
 npm start
 ```
 
@@ -82,14 +84,13 @@ Use this to upload one delivery video or two synchronized camera-angle videos an
 Start the testing backend:
 
 ```powershell
-cd C:\Users\nikhi\OneDrive\Desktop\DRS
 .\.venv\Scripts\python.exe drs_app.py --testing-api --host 127.0.0.1 --port 8766
 ```
 
 Start the React/Tailwind frontend:
 
 ```powershell
-cd C:\Users\nikhi\OneDrive\Desktop\DRS\dashboard\testing-platform
+cd dashboard\testing-platform
 npm install
 npm run dev
 ```

@@ -120,7 +120,6 @@ Example options:
 Backend:
 
 ```powershell
-cd C:\Users\nikhi\OneDrive\Desktop\DRS
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe drs_app.py --testing-api --host 127.0.0.1 --port 8766
 ```
@@ -128,7 +127,7 @@ cd C:\Users\nikhi\OneDrive\Desktop\DRS
 Frontend:
 
 ```powershell
-cd C:\Users\nikhi\OneDrive\Desktop\DRS\dashboard\testing-platform
+cd dashboard\testing-platform
 npm install
 npm run dev
 ```

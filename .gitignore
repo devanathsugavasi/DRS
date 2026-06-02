@@ -8,9 +8,12 @@ __pycache__/
 
 .env
 .env.*
+/package-lock.json
 
 data/logs/
 data/recordings/
+data/exports/
+data/decisions/*.db
 data/detections/
 data/tracking/
 data/sync/
@@ -25,12 +28,19 @@ dashboard/electron/.vite/
 dashboard/testing-platform/node_modules/
 dashboard/testing-platform/dist/
 dashboard/testing-platform/.vite/
+node_modules/
+dist/
+build/
 
 models/.cache/
+models/*.pt
+!models/.gitkeep
 models/best.pt
 
 .DS_Store
 Thumbs.db
+logs/
+*.egg-info/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

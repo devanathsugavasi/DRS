@@ -3,12 +3,28 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import time
 
 import cv2
 
 from core.integration import DRSPipeline
 from ui.dashboard import run_dashboard
+
+
+RUNTIME_DIRECTORIES = (
+    "data/recordings",
+    "data/exports",
+    "data/calibration",
+    "data/decisions",
+    "logs",
+    "models",
+)
+
+
+def ensure_runtime_directories() -> None:
+    for directory in RUNTIME_DIRECTORIES:
+        Path(directory).mkdir(parents=True, exist_ok=True)
 
 
 def parse_camera_ids(value: str) -> list[int]:
@@ -39,13 +55,14 @@ def run_headless(camera_ids: list[int], seconds: float, record: bool) -> None:
     pipeline = DRSPipeline(camera_ids=camera_ids, record=record)
     pipeline.start()
     started = time.perf_counter()
+    quit_requested = False
     try:
-        while time.perf_counter() - started < seconds:
+        while not quit_requested and (time.perf_counter() - started < seconds):
             state = pipeline.process_once()
             for camera_id, output in state.frames.items():
                 cv2.imshow(f"DRS cam {camera_id}", output.annotated)
             if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+                quit_requested = True
     finally:
         pipeline.export_tracking()
         pipeline.detector.flush("csv")
@@ -54,6 +71,7 @@ def run_headless(camera_ids: list[int], seconds: float, record: bool) -> None:
 
 
 def main() -> None:
+    ensure_runtime_directories()
     parser = argparse.ArgumentParser(description="Cricket DRS prototype")
     parser.add_argument("--cameras", default="0,1", help="Comma-separated camera indices")
     parser.add_argument("--record", action="store_true", help="Save synchronized camera streams")

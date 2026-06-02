@@ -1,13 +1,22 @@
---extra-index-url https://download.pytorch.org/whl/cu129
 opencv-python>=4.9
 numpy>=1.26
 scipy>=1.11
-torch==2.8.0+cu129
-torchvision==0.23.0+cu129
 ultralytics>=8.2
 pillow>=10.0
 sounddevice>=0.4
 fastapi>=0.115
 uvicorn[standard]>=0.30
+websockets>=12.0
 python-multipart>=0.0.9
 reportlab>=4.2
+aiofiles>=23.0
+sqlalchemy>=2.0
+alembic>=1.13
+pydantic>=2.0
+pydantic-settings>=2.0
+python-dotenv>=1.0
+rich>=13.0
+loguru>=0.7
+pytest>=8.0
+pytest-asyncio>=0.23
+httpx>=0.27
