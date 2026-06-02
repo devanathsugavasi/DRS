@@ -34,6 +34,7 @@ class UmpireDashboard(tk.Tk):
         self.main_camera_var = tk.StringVar(value=f"CAM {default_main}")
         self.small_camera_var = tk.StringVar(value=f"CAM {default_small}")
         self.status_var = tk.StringVar(value="Ready")
+        self.decision_var = tk.StringVar(value="REVIEW INCONCLUSIVE")
 
         self.image_refs: dict[int, ImageTk.PhotoImage] = {}
         self.video_labels: dict[int, tk.Label] = {}
@@ -52,9 +53,13 @@ class UmpireDashboard(tk.Tk):
     def _build_ui(self) -> None:
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("TFrame", background="#0b0f16")
-        style.configure("TLabel", background="#0b0f16", foreground="#f4f5f7", font=("Segoe UI", 10))
-        style.configure("TButton", font=("Segoe UI", 11), padding=(10, 8))
+        style.configure(".", background="#0A0E1A", foreground="#E8ECF0", font=("Rajdhani", 11))
+        style.configure("TFrame", background="#0A0E1A")
+        style.configure("TLabel", background="#0A0E1A", foreground="#E8ECF0", font=("Rajdhani", 11))
+        style.configure("TButton", background="#1B2333", foreground="#FFD700", borderwidth=0, focuscolor="#FFD700", padding=(12, 6), font=("Rajdhani", 11, "bold"))
+        style.map("TButton", background=[("active", "#2A3A5C")])
+        style.configure("Decision.TLabel", background="#0A0E1A", foreground="#FFD700", font=("Rajdhani", 28, "bold"))
+        style.configure("Status.TLabel", background="#101827", foreground="#00E5FF", font=("Rajdhani", 11, "bold"))
 
         self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
@@ -99,7 +104,8 @@ class UmpireDashboard(tk.Tk):
         ttk.Button(top, text="Wall", command=lambda: self._set_layout("Wall")).grid(row=0, column=6, padx=(16, 4))
         ttk.Button(top, text="Review", command=lambda: self._set_layout("Review")).grid(row=0, column=7, padx=4)
         ttk.Button(top, text="Focus", command=lambda: self._set_layout("Focus")).grid(row=0, column=8, padx=4)
-        ttk.Label(top, textvariable=self.status_var).grid(row=0, column=99, sticky="e")
+        ttk.Label(top, textvariable=self.decision_var, style="Decision.TLabel").grid(row=0, column=9, padx=(18, 8))
+        ttk.Label(top, textvariable=self.status_var, style="Status.TLabel").grid(row=0, column=99, sticky="e")
 
         self.video_grid = ttk.Frame(self)
         self.video_grid.grid(row=1, column=0, sticky="nsew", padx=12, pady=6)
@@ -115,6 +121,7 @@ class UmpireDashboard(tk.Tk):
         ttk.Button(controls, text="Frame +1", command=lambda: self._step(1)).pack(side=tk.LEFT, padx=4)
         ttk.Button(controls, text="Instant Replay", command=self._instant_replay).pack(side=tk.LEFT, padx=4)
         ttk.Button(controls, text="Save Replay", command=self._save_replay).pack(side=tk.LEFT, padx=4)
+        ttk.Label(controls, text="Appeals: LBW | Edge | No Ball | Run Out", style="Status.TLabel").pack(side=tk.RIGHT, padx=4)
 
     def _update_live(self) -> None:
         if self.replay is None and not self.paused:
@@ -136,6 +143,9 @@ class UmpireDashboard(tk.Tk):
             dropped = sum(state.sync_report.dropped_frames.values())
             suffix = f" | dropped {dropped}" if dropped else ""
             self.status_var.set(f"Live | sync spread {state.sync_report.spread_ms:.1f} ms{suffix}")
+            decision = getattr(state, "decision", None)
+            if decision:
+                self.decision_var.set(getattr(decision, "decision", "REVIEW INCONCLUSIVE"))
         self._render_raw({camera_id: output.annotated for camera_id, output in state.frames.items()})
 
     def _render_raw(self, frames: dict[int, object]) -> None:
@@ -208,7 +218,7 @@ class UmpireDashboard(tk.Tk):
                 self.video_grid,
                 text=f"CAM {camera_id}\nwaiting for feed",
                 bg="#0b0f16",
-                fg="#f4f5f7",
+                fg="#FFD700",
                 font=("Segoe UI", 15, "bold"),
                 bd=2,
                 relief=tk.SOLID,
