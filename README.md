@@ -1,19 +1,37 @@
-# Cricket DRS Prototype
+# Cricket DRS - Professional Decision Review System
 
-This workspace contains a modular Python/OpenCV cricket DRS prototype covering:
+[![DRS CI](https://github.com/NikhilSai-4409/DRS/actions/workflows/ci.yml/badge.svg)](https://github.com/NikhilSai-4409/DRS/actions/workflows/ci.yml)
 
-- synchronized 2-6 camera capture with timestamped frames
-- instant replay buffers, playback controls, slow motion, and frame stepping
-- efficient OpenCV `VideoWriter` recording
-- YOLOv8 cricket ball detection with JSON/CSV export
-- Kalman-filter ball tracking, trajectory drawing, velocity, and direction
-- checkerboard camera calibration and pitch-plane homography support
-- software synchronization verification, dropped-frame reporting, and flash sync hooks
-- projectile trajectory prediction and LBW decision suggestions
-- audio FFT edge detection with video timestamp alignment
-- Tkinter umpire dashboard for live review
+Cricket DRS is an engineering-grade prototype for cricket decision review workflows. It combines multi-camera capture, replay, YOLO-based ball detection, ball tracking, calibration, LBW gates, UltraEdge-style audio analysis, clean DRS animation, and operator dashboards.
+
+The system does not claim vendor-grade accuracy without real validation data. If model metrics, calibration, sync, tracking, replay FPS, or confidence gates are missing or below threshold, decisions are marked `REVIEW INCONCLUSIVE`.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Cameras["2-6 cameras"] --> Sync["Sync manager"]
+    Sync --> Detector["YOLO11/YOLOv8 selector"]
+    Detector --> Tracker["ByteTrack association + EKF"]
+    Tracker --> Calib["Calibration + 3D reconstruction"]
+    Calib --> LBW["LBW readiness gates"]
+    Tracker --> Audio["UltraEdge audio analyzer"]
+    Tracker --> HotSpot["HotSpot simulation"]
+    LBW --> API["FastAPI/WebSocket backend"]
+    API --> Electron["Broadcast command center"]
+    API --> Testing["React testing platform"]
+```
+
+## Prerequisites
+
+- Python 3.11 recommended
+- Node.js 20+
+- Optional RTX GPU with CUDA 12.9
+- For tournament testing: calibrated high-FPS cameras and a validated cricket-specific model
 
 ## Install
+
+CPU-safe install:
 
 ```powershell
 python -m venv .venv
@@ -21,116 +39,132 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-For RTX/CUDA GPU installs:
+RTX/CUDA install:
 
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements-gpu.txt
 ```
 
-Place a trained cricket ball model at:
-
-```text
-models/cricket_ball_yolov8.pt
-```
-
-If the custom model is absent, the detector falls back to YOLOv8n's COCO `sports ball` class.
-
-## Run Dashboard
-
-```powershell
-python drs_app.py --cameras 0,1 --record
-```
-
-## Electron Broadcast Dashboard
+Install Electron dashboard dependencies:
 
 ```powershell
 cd dashboard\electron
 npm install
-npm start
+cd ..\..
 ```
 
-The Electron shell connects to the Python backend at `http://127.0.0.1:8765`.
-It now provides an enterprise DRS command-center layout with live camera review, appeal presets, decision analytics, system monitoring, pitch map, 3D trajectory canvas, trend charts, replay controls, logs, and WebSocket backend health.
-
-Start the backend first:
+Install testing-platform dependencies:
 
 ```powershell
-python drs_app.py --api --cameras 0,1,2,3,4,5 --record
+cd dashboard\testing-platform
+npm install
+cd ..\..
 ```
 
-Then start Electron in a second terminal:
+## Run
+
+Live FastAPI backend for Electron:
+
+```powershell
+.\.venv\Scripts\python.exe drs_app.py --api --cameras 0,1,2,3,4,5 --record
+```
+
+Electron broadcast dashboard:
 
 ```powershell
 cd dashboard\electron
 npm start
 ```
 
-The backend exposes:
-
-- `GET /api/cameras` for camera IDs and health
-- `GET /api/presets/NO_BALL`, `/api/presets/LBW`, `/api/presets/EDGE`
-- `GET /api/live/{camera_id}.jpg` for latest live frame
-- `POST /api/replay/create` to snapshot the replay buffer
-- `POST /api/replay/request` with `{ "camera_ids": [0, 2], "frame_index": 123 }` for synced multi-camera replay metadata
-- `GET /api/replay/{camera_id}.jpg?frame_index=123`
-- `WS /ws/status` for sync and camera health
-
-Electron uses the WebSocket to show backend connection/sync status and uses `/api/replay/request` so all selected cameras are aligned to the same replay timestamp for appeal review.
-
-## Offline DRS Testing Platform
-
-Use this to upload one delivery video or two synchronized camera-angle videos and generate a DRS-style test analysis without live cameras.
-
-Start the testing backend:
+Offline upload testing backend:
 
 ```powershell
 .\.venv\Scripts\python.exe drs_app.py --testing-api --host 127.0.0.1 --port 8766
 ```
 
-Start the React/Tailwind frontend:
+React testing platform:
 
 ```powershell
 cd dashboard\testing-platform
-npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:5174`.
+Headless OpenCV mode:
 
-Full architecture, API design, database design, source layout, and deployment notes are in `docs/DRS_TESTING_PLATFORM.md`.
+```powershell
+.\.venv\Scripts\python.exe drs_app.py --cameras 0,1 --headless --seconds 120
+```
 
-Create a Windows desktop launcher:
+Desktop launcher:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\create_testing_platform_shortcut.ps1
 ```
 
-Windows blocks fully automatic taskbar pinning for normal apps, so after the shortcut is created, right-click `Cricket DRS Testing Platform` on the desktop and choose **Pin to taskbar**.
+## Configuration
 
-## Accuracy Workflow
+Copy `.env.example` to `.env` and adjust ports, log level, sync tolerance, replay buffer, and decision thresholds as needed.
 
-For reliable ball tracking, train a cricket-specific model on your own footage:
+The detector selector prefers:
+
+1. `models/yolo11x.pt`
+2. `models/yolo11l.pt`
+3. `models/yolov8x.pt`
+4. `models/cricket_ball_yolov8.pt`
+
+Model files are ignored by default except committed placeholders. Add validated model metrics with:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\train_yolo_drs.py --base-model yolo11l.pt --epochs 120 --imgsz 1280 --device 0
 .\.venv\Scripts\python.exe scripts\evaluate_yolo_drs.py --model models\training_runs\drs_yolov8\weights\best.pt
 ```
 
-The detector selector prefers local `models/yolo11x.pt`, then `models/yolo11l.pt`, then `models/yolov8x.pt`, then `models/cricket_ball_yolov8.pt`. It does not claim tournament readiness unless model mAP, ball recall, calibration, sync, tracking, replay FPS, and decision confidence pass the readiness gates.
+## Calibration
 
-See `docs/ACCURACY_PLAYBOOK.md` for camera calibration, training data, reliability gates, and clean DRS animation guidance.
-
-## Run Headless OpenCV Mode
+Capture checkerboard images for each camera under final match placement, zoom, focus, and exposure.
 
 ```powershell
-python drs_app.py --cameras 0,1 --headless --seconds 120
+.\.venv\Scripts\python.exe scripts\calibrate.py --cameras 0,1 --images-dir data\calibration\images
 ```
 
-Recordings, detections, tracking exports, audio events, and calibration files are written under `data/`.
+Write measured readiness metrics after validation:
 
-## Production Notes
+```powershell
+.\.venv\Scripts\python.exe scripts\write_calibration_readiness.py --reprojection-error-px 1.1 --homography-error-cm 3.5 --pitch-coordinate-error-cm 4.0
+```
 
-- Use global shutter/high-FPS cameras where possible.
-- Prefer hardware trigger or genlock in production; this project includes software timestamp alignment and optional flash detection for lower-cost deployments.
-- Train YOLOv8 on red and white balls under real match lighting, including motion blur, shadows, pitch wear, and crowd backgrounds.
-- For LBW-grade accuracy, feed the trajectory engine with calibrated multi-camera 3D reconstruction rather than the approximate pixel-to-world helper.
+## Accuracy Gates
+
+`OUT`, `NOT OUT`, and `UMPIRE'S CALL` are only shown when all gates pass:
+
+- model mAP50 >= 0.88
+- ball recall >= 0.90
+- calibration reprojection error <= 1.5 px
+- homography validation error <= 5 cm
+- tracking reliability medium/high
+- max missing detection gap <= 5 frames
+- sync error <= 8 ms
+- replay FPS >= 24
+- decision confidence >= 70%
+
+Otherwise the system reports `REVIEW INCONCLUSIVE`.
+
+## Tests
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests -v
+```
+
+## Documentation
+
+- `docs/ACCURACY_PLAYBOOK.md`
+- `docs/DRS_TESTING_PLATFORM.md`
+
+## Contributing
+
+Keep changes modular, run tests after each phase, and never remove readiness warnings unless replacing them with measured validation metrics.
+
+## License
+
+No license is currently declared. Add a license before public production distribution.
