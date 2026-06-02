@@ -150,7 +150,9 @@ Write measured readiness metrics after validation:
 
 Otherwise the system reports `REVIEW INCONCLUSIVE`.
 
-## Tests
+## Testing
+
+### Unit Tests
 
 Install package in editable mode, then run tests:
 
@@ -165,6 +167,40 @@ Or from venv:
 .\.venv\Scripts\python.exe -m pip install -e .
 .\.venv\Scripts\python.exe -m pytest tests/ -v --tb=short
 ```
+
+### System Testing
+
+**Generate test video (10-30 seconds):**
+
+```powershell
+python scripts/generate_test_video.py --output test_delivery.mp4 --duration 10 --fps 30
+python scripts/generate_test_video.py --output test_delivery_2cam_1.mp4 --duration 10
+python scripts/generate_test_video.py --output test_delivery_2cam_2.mp4 --duration 10
+```
+
+**Test single camera with testing platform:**
+
+1. Start backend:
+```powershell
+python drs_app.py --testing-api --host 127.0.0.1 --port 8766
+```
+
+2. Start frontend (in new terminal):
+```powershell
+cd dashboard/testing-platform
+npm run dev
+```
+
+3. Upload `test_delivery.mp4` via web interface
+4. Verify results populate (ball tracking, speed, LBW decision)
+
+**Test multi-camera live capture (2-3 hours):**
+
+```powershell
+python drs_app.py --api --cameras 0,1,2 --record
+```
+
+See `TESTING_GUIDE.md` for detailed troubleshooting and performance tips.
 
 ## Documentation
 

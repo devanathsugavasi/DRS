@@ -141,14 +141,21 @@ def _clean_name(filename: str | None, fallback: str) -> str:
 def _run_job(job_id: str, videos: list[Path], options: AnalysisOptions) -> None:
     db.update_job(job_id, "processing")
     try:
+        log.info(f"Starting analysis for job {job_id} with {len(videos)} video(s)")
         result = pipeline.process(job_id, videos, options)
         db.insert_tracking(job_id, [point for cam in result["cameras"] for point in cam["tracking_points"]])
         db.update_job(job_id, "complete", result=result)
+        log.info(f"Job {job_id} completed successfully")
     except Exception as exc:
-        db.update_job(job_id, "failed", error=str(exc))
+        error_msg = f"{type(exc).__name__}: {str(exc)}"
+        log.error(f"Job {job_id} failed with error: {error_msg}", exc_info=True)
+        db.update_job(job_id, "failed", error=error_msg)
 
 
 def run_testing_api(host: str, port: int) -> None:
     import uvicorn
-
+    
+    log.info(f"Starting Cricket DRS Testing API on http://{host}:{port}")
+    log.info("Loading ball detection model...")
+    
     uvicorn.run(create_testing_app(), host=host, port=port)
