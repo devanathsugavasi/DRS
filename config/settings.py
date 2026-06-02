@@ -2,8 +2,42 @@
 
 from pathlib import Path
 
+try:
+    from pydantic_settings import BaseSettings
+except Exception:  # pragma: no cover - allows old environments to import before deps are installed
+    BaseSettings = object  # type: ignore[misc,assignment]
+
+
+class DRSSettings(BaseSettings):
+    PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
+    DATA_DIR: Path = PROJECT_ROOT / "data"
+    MODELS_DIR: Path = PROJECT_ROOT / "models"
+    LOG_LEVEL: str = "INFO"
+    API_HOST: str = "127.0.0.1"
+    API_PORT: int = 8765
+    TESTING_API_PORT: int = 8766
+    CAMERA_SYNC_TOLERANCE_MS: float = 2.0
+    REPLAY_BUFFER_SECONDS: float = 30.0
+    BALL_CONFIDENCE_THRESHOLD: float = 0.45
+    LBW_PITCH_ZONE_MARGIN_PX: int = 10
+    STUMP_WIDTH_MM: float = 228.6
+    STUMP_HEIGHT_MM: float = 711.2
+    FRAME_HISTORY_SIZE: int = 300
+
+    if BaseSettings is not object:
+        model_config = {
+            "env_file": ".env",
+            "env_file_encoding": "utf-8",
+            "extra": "ignore",
+        }
+
+
+settings = DRSSettings()
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
+EXPORTS_DIR = DATA_DIR / "exports"
+DECISIONS_DIR = DATA_DIR / "decisions"
 CALIBRATION_DIR = DATA_DIR / "calibration"
 RECORDINGS_DIR = DATA_DIR / "recordings"
 DETECTIONS_DIR = DATA_DIR / "detections"
@@ -20,6 +54,9 @@ for directory in (
     SYNC_DIR,
     AUDIO_DIR,
     LOGS_DIR,
+    EXPORTS_DIR,
+    DECISIONS_DIR,
+    BASE_DIR / "models",
 ):
     directory.mkdir(parents=True, exist_ok=True)
 

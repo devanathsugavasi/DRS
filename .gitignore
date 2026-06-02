@@ -8,6 +8,7 @@ __pycache__/
 
 .env
 .env.*
+!.env.example
 /package-lock.json
 
 data/logs/

@@ -1,39 +1,50 @@
-"""
-utils/logger.py — Structured logging for Cricket DRS
-"""
-import logging
+"""Structured logging for Cricket DRS."""
+
+from __future__ import annotations
+
 import sys
-from pathlib import Path
-from logging.handlers import RotatingFileHandler
-from config.settings import LOGS_DIR
+from functools import lru_cache
+
+from config.settings import settings
+
+try:
+    from loguru import logger as _logger
+except Exception:  # pragma: no cover
+    import logging
+
+    _logger = None
+    logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL, logging.INFO))
 
 
-def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:
-    """
-    Return a logger that writes structured records to both
-    stdout and a rotating log file under data/logs/.
-    """
-    logger = logging.getLogger(name)
-    if logger.handlers:            # avoid duplicate handlers on reimport
-        return logger
-
-    logger.setLevel(level)
-    fmt = logging.Formatter(
-        fmt="%(asctime)s | %(levelname)-8s | %(name)-28s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+def configure_logging() -> None:
+    if _logger is None:
+        return
+    log_dir = settings.DATA_DIR / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    _logger.remove()
+    _logger.add(
+        sys.stderr,
+        level=settings.LOG_LEVEL,
+        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan> - {message}",
+    )
+    _logger.add(
+        log_dir / "drs_{time:YYYY-MM-DD}.log",
+        rotation="1 day",
+        retention="30 days",
+        level="DEBUG",
     )
 
-    # Console
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setFormatter(fmt)
-    ch.setLevel(logging.INFO)
-    logger.addHandler(ch)
 
-    # Rotating file (10 MB × 5 backups)
-    log_path = LOGS_DIR / f"{name}.log"
-    fh = RotatingFileHandler(log_path, maxBytes=10 * 1024 * 1024, backupCount=5)
-    fh.setFormatter(fmt)
-    fh.setLevel(logging.DEBUG)
-    logger.addHandler(fh)
+@lru_cache(maxsize=1)
+def _configured() -> bool:
+    configure_logging()
+    return True
 
-    return logger
+
+def get_logger(name: str, level: int | None = None):
+    _configured()
+    if _logger is None:
+        import logging
+
+        return logging.getLogger(name)
+    return _logger.bind(name=name)

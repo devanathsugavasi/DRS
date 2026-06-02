@@ -133,6 +133,13 @@ class DRSBackend:
             "frames": frames,
         }
 
+    def status_events(self) -> list[dict]:
+        health = self.health()
+        return [
+            {"type": "camera_health", **health},
+            {"type": "sync_report", "sync": health.get("sync", {}), "timestamp_ms": health.get("timestamp_ms")},
+        ]
+
 
 def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
     backend = DRSBackend(camera_ids, record=record)
@@ -228,8 +235,9 @@ def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
         await websocket.accept()
         try:
             while True:
-                await websocket.send_json(backend.health())
-                await asyncio.sleep(0.25)
+                for payload in backend.status_events():
+                    await websocket.send_json(payload)
+                await asyncio.sleep(0.5)
         except WebSocketDisconnect:
             return
 

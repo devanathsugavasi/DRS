@@ -11,6 +11,7 @@ import numpy as np
 
 from config.settings import CALIBRATION_DIR, CHECKERBOARD_SIZE, SQUARE_SIZE_MM
 from utils.helpers import save_json
+from utils.helpers import load_json
 
 
 @dataclass(slots=True)
@@ -97,9 +98,61 @@ class MultiCameraCalibrator:
         mapped = cv2.perspectiveTransform(point, np.asarray(calibration.homography, dtype=np.float32))
         return float(mapped[0, 0, 0]), float(mapped[0, 0, 1])
 
+    def pixel_to_pitch_mm(self, camera_id: int, px: float, py: float, calibration: CameraCalibration) -> tuple[float, float]:
+        if calibration.camera_id != camera_id:
+            raise ValueError(f"Calibration belongs to camera {calibration.camera_id}, not {camera_id}")
+        x, y = self.pixel_to_world(px, py, calibration)
+        return x * 1000.0, y * 1000.0
+
+    def triangulate_3d(
+        self,
+        observations: dict[int, tuple[float, float]],
+        calibrations: dict[int, CameraCalibration],
+    ) -> tuple[float, float, float]:
+        if len(observations) < 2:
+            raise ValueError("At least two calibrated camera observations are required")
+        camera_ids = list(observations.keys())[:2]
+        projections = []
+        points = []
+        for camera_id in camera_ids:
+            calibration = calibrations[camera_id]
+            camera_matrix = np.asarray(calibration.camera_matrix, dtype=np.float64)
+            rvec = np.asarray(calibration.rotation_vectors[0], dtype=np.float64)
+            tvec = np.asarray(calibration.translation_vectors[0], dtype=np.float64)
+            rotation, _ = cv2.Rodrigues(rvec)
+            projection = camera_matrix @ np.hstack([rotation, tvec.reshape(3, 1)])
+            projections.append(projection)
+            points.append(np.asarray(observations[camera_id], dtype=np.float64).reshape(2, 1))
+        point_h = cv2.triangulatePoints(projections[0], projections[1], points[0], points[1])
+        denom = float(point_h[3, 0]) if abs(float(point_h[3, 0])) > 1e-9 else 1e-9
+        point = point_h[:3, 0] / denom
+        return float(point[0]), float(point[1]), float(point[2])
+
+    def homography_validation_error_cm(
+        self,
+        calibration: CameraCalibration,
+        image_points: np.ndarray,
+        world_points_m: np.ndarray,
+    ) -> float:
+        if calibration.homography is None:
+            raise ValueError("Calibration has no pitch-plane homography")
+        projected = cv2.perspectiveTransform(
+            image_points.reshape(-1, 1, 2).astype(np.float32),
+            np.asarray(calibration.homography, dtype=np.float32),
+        ).reshape(-1, 2)
+        error_m = np.linalg.norm(projected - world_points_m.reshape(-1, 2), axis=1)
+        return float(np.mean(error_m) * 100.0)
+
     def save(self, calibrations: list[CameraCalibration], path: Path | None = None) -> Path:
         path = path or CALIBRATION_DIR / "camera_calibration.json"
         return save_json([asdict(item) for item in calibrations], path)
+
+    def save_per_camera(self, calibration: CameraCalibration) -> Path:
+        return save_json(asdict(calibration), CALIBRATION_DIR / f"calibration_{calibration.camera_id}.json")
+
+    def load_per_camera(self, camera_id: int) -> CameraCalibration:
+        data = load_json(CALIBRATION_DIR / f"calibration_{camera_id}.json")
+        return CameraCalibration(**data)
 
     def draw_reprojection(
         self,
