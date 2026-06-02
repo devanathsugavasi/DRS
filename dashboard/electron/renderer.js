@@ -231,8 +231,7 @@ function connectStatusSocket() {
   });
 
   socket.addEventListener("message", (event) => {
-    latestHealth = JSON.parse(event.data);
-    updateHealth(latestHealth);
+    handleSocketEvent(JSON.parse(event.data));
   });
 
   socket.addEventListener("close", () => {
@@ -244,6 +243,42 @@ function connectStatusSocket() {
   socket.addEventListener("error", () => {
     setBackendState(false, "Backend offline");
   });
+}
+
+function handleSocketEvent(payload) {
+  const type = payload.type || "camera_health";
+  if (type === "camera_health") {
+    latestHealth = payload;
+    updateHealth(payload);
+  } else if (type === "sync_report") {
+    const sync = payload.sync || {};
+    const spread = Number(sync.spread_ms || 0);
+    el.syncChip.textContent = `SYNC ${spread.toFixed(1)} ms`;
+  } else if (type === "decision_ready") {
+    if (payload.decision) {
+      config.decision = payload.decision;
+      config.confidence = Math.round(Number(payload.confidence || config.confidence));
+      saveConfig();
+      revealDecision(config.decision);
+    }
+  } else if (type === "appeal_started") {
+    log(`Appeal started: ${payload.appeal_type || "review"}`);
+  } else if (type === "ball_detected") {
+    el.inferenceMetric.textContent = `${Number(payload.inference_ms || 0).toFixed(1)} ms`;
+  } else if (type === "replay_ready") {
+    log("Replay ready from backend");
+  } else if (type === "no_ball_alert") {
+    revealDecision("NO BALL");
+  }
+}
+
+function revealDecision(decision) {
+  const overlay = document.createElement("div");
+  overlay.className = `decision-reveal ${String(decision).toLowerCase().replace(/[^a-z]+/g, "-")}`;
+  overlay.textContent = decision.toUpperCase();
+  document.body.appendChild(overlay);
+  window.setTimeout(() => overlay.classList.add("show"), 20);
+  window.setTimeout(() => overlay.remove(), 3200);
 }
 
 async function loadCameras() {

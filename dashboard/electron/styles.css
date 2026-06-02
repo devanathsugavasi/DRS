@@ -1,17 +1,17 @@
 :root {
   color-scheme: dark;
-  --bg: #020812;
-  --panel: rgba(9, 22, 38, 0.9);
-  --panel-2: rgba(13, 31, 51, 0.86);
-  --line: rgba(88, 142, 196, 0.34);
+  --bg: #080C14;
+  --panel: #0F1723;
+  --panel-2: rgba(15, 23, 35, 0.9);
+  --line: rgba(255, 215, 0, 0.15);
   --muted: #8da7c4;
   --text: #edf6ff;
-  --blue: #2388ff;
-  --green: #35ff91;
-  --amber: #ffd24d;
-  --red: #ff4f45;
+  --blue: #00E5FF;
+  --green: #00FF88;
+  --amber: #FFD700;
+  --red: #FF2D2D;
   --purple: #7b3dff;
-  font-family: Inter, "Segoe UI", Arial, sans-serif;
+  font-family: Inter, "Rajdhani", "Segoe UI", Arial, sans-serif;
   background: var(--bg);
   color: var(--text);
 }
@@ -28,7 +28,18 @@ body {
   background:
     radial-gradient(circle at 12% 0%, rgba(35, 136, 255, 0.18), transparent 32%),
     radial-gradient(circle at 90% 5%, rgba(53, 255, 145, 0.12), transparent 30%),
-    #020812;
+    #080C14;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.08;
+  background-image: repeating-radial-gradient(circle at 12% 22%, #fff 0 1px, transparent 1px 5px);
+  mix-blend-mode: overlay;
+  z-index: 100;
 }
 
 button,
@@ -53,7 +64,7 @@ input {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: linear-gradient(145deg, rgba(9, 24, 43, 0.94), rgba(4, 12, 24, 0.9));
-  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.32);
+  box-shadow: 0 0 20px rgba(255, 215, 0, 0.08), 0 14px 42px rgba(0, 0, 0, 0.32);
 }
 
 .tournament-header {
@@ -481,9 +492,42 @@ input {
 .decision-result {
   padding: clamp(12px, 2vh, 22px) clamp(14px, 1.1vw, 18px) 8px;
   color: var(--red);
+  text-shadow: 0 0 22px rgba(255, 45, 45, 0.45);
   font-size: clamp(38px, 4.6vw, 68px);
   line-height: 1;
   font-weight: 950;
+}
+
+.decision-reveal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.62);
+  color: var(--amber);
+  font-size: clamp(56px, 10vw, 170px);
+  font-weight: 950;
+  letter-spacing: 0;
+  opacity: 0;
+  transform: scale(0.3);
+  transition: opacity 220ms ease, transform 520ms cubic-bezier(.2, 1.45, .35, 1);
+  text-shadow: 0 0 42px rgba(255, 215, 0, 0.65);
+}
+
+.decision-reveal.show {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.decision-reveal.out {
+  color: var(--red);
+  text-shadow: 0 0 48px rgba(255, 45, 45, 0.72);
+}
+
+.decision-reveal.not-out {
+  color: var(--green);
+  text-shadow: 0 0 48px rgba(0, 255, 136, 0.72);
 }
 
 .decision-meter {
