@@ -14,6 +14,9 @@ from fastapi.responses import FileResponse
 
 from core.testing_database import TestingDatabase
 from core.testing_pipeline import AnalysisOptions, DeliveryTestingPipeline, OUTPUT_DIR, UPLOAD_DIR
+from utils.logger import get_logger
+
+log = get_logger("testing_api")
 
 
 DB_PATH = Path("data/testing/drs_testing.sqlite3")
