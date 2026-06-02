@@ -1,0 +1,16 @@
+[project]
+name = "cricket-drs"
+version = "1.0.0"
+description = "Professional Cricket Decision Review System"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "W", "F"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
