@@ -3,28 +3,28 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import time
 
 import cv2
 
+from config.settings import settings
 from core.integration import DRSPipeline
 from ui.dashboard import run_dashboard
 
 
 RUNTIME_DIRECTORIES = (
-    "data/recordings",
-    "data/exports",
-    "data/calibration",
-    "data/decisions",
-    "logs",
-    "models",
+    settings.DATA_DIR / "recordings",
+    settings.DATA_DIR / "exports",
+    settings.DATA_DIR / "calibration",
+    settings.DATA_DIR / "decisions",
+    settings.PROJECT_ROOT / "logs",
+    settings.MODELS_DIR,
 )
 
 
 def ensure_runtime_directories() -> None:
     for directory in RUNTIME_DIRECTORIES:
-        Path(directory).mkdir(parents=True, exist_ok=True)
+        directory.mkdir(parents=True, exist_ok=True)
 
 
 def parse_camera_ids(value: str) -> list[int]:
@@ -81,6 +81,7 @@ def main() -> None:
     parser.add_argument("--scan-limit", type=int, default=10, help="Number of camera indices to scan")
     parser.add_argument("--api", action="store_true", help="Run FastAPI backend for Electron dashboard")
     parser.add_argument("--testing-api", action="store_true", help="Run offline upload-based DRS testing API")
+    parser.add_argument("--training-app", action="store_true", help="Open the desktop YOLO training application")
     parser.add_argument("--host", default="127.0.0.1", help="API host")
     parser.add_argument("--port", type=int, default=8765, help="API port")
     args = parser.parse_args()
@@ -90,7 +91,11 @@ def main() -> None:
         return
 
     camera_ids = parse_camera_ids(args.cameras)
-    if args.testing_api:
+    if args.training_app:
+        from ui.training_app import run_training_app
+
+        run_training_app()
+    elif args.testing_api:
         from core.testing_api import run_testing_api
 
         run_testing_api(args.host, args.port)

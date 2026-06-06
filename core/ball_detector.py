@@ -108,7 +108,7 @@ class BallDetector:
         self.model_readiness = readiness
         if selected_path.exists():
             self.model = YOLO(str(selected_path))
-            log.info("Loaded %s detector from %s", readiness.detector_family, selected_path)
+            log.info("Loaded {} detector from {}", readiness.detector_family, selected_path)
         else:
             self.model = None
             log.warning("No local detector model found; add YOLO11x/YOLO11l/YOLOv8x/custom cricket model")
@@ -117,7 +117,7 @@ class BallDetector:
             try:
                 self.model.export(format="engine", half=True, simplify=True)
             except Exception as exc:
-                log.warning("TensorRT export failed: %s", exc)
+                log.warning("TensorRT export failed: {}", exc)
 
     def detect(
         self,

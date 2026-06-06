@@ -16,7 +16,18 @@ def main() -> None:
     parser.add_argument("--device", default=0, help="CUDA device id or cpu")
     parser.add_argument("--project", default="models/training_runs")
     parser.add_argument("--name", default="drs_yolov8")
+    parser.add_argument(
+        "--export-best",
+        default="",
+        help="Optional destination for best.pt after training, for example models/cricket_ball_yolov8.pt",
+    )
     args = parser.parse_args()
+
+    data_path = Path(args.data)
+    project_path = Path(args.project)
+    if not data_path.exists():
+        raise FileNotFoundError(f"Dataset YAML not found: {data_path}")
+    project_path.mkdir(parents=True, exist_ok=True)
 
     from ultralytics import YOLO
 
@@ -47,7 +58,15 @@ def main() -> None:
 
     best = Path(result.save_dir) / "weights" / "best.pt"
     print(f"Training complete. Best model: {best}")
-    print("Copy the best model to models/cricket_ball_yolov8.pt after validation.")
+    if args.export_best:
+        import shutil
+
+        destination = Path(args.export_best)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(best, destination)
+        print(f"Best model copied to: {destination}")
+    else:
+        print("Copy the best model to models/cricket_ball_yolov8.pt after validation.")
 
 
 if __name__ == "__main__":

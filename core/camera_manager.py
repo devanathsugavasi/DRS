@@ -68,9 +68,9 @@ class CameraWorker(threading.Thread):
         self._capture = cv2.VideoCapture(self.camera_id, cv2.CAP_ANY)
         if not self._capture.isOpened():
             if not self.synthetic_on_fail:
-                log.error("Camera %s is unavailable", self.camera_id)
+                log.error("Camera {} is unavailable", self.camera_id)
                 return
-            log.warning("Camera %s unavailable; using synthetic feed", self.camera_id)
+            log.warning("Camera {} unavailable; using synthetic feed", self.camera_id)
             self.synthetic = True
             self._run_synthetic()
             return

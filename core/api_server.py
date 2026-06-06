@@ -53,7 +53,7 @@ class DRSBackend:
 
     def start(self) -> None:
         self.camera_manager.start()
-        log.info("API backend started with cameras %s", self.camera_ids)
+        log.info("API backend started with cameras {}", self.camera_ids)
 
     def stop(self) -> None:
         self.camera_manager.stop()
