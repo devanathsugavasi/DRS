@@ -4,9 +4,36 @@
   "private": true,
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build:ui": "echo 'Using Electron renderer directly'",
+    "build": "npm run build:ui && electron-builder",
+    "package": "electron-builder --dir",
+    "dist": "electron-builder"
   },
-  "dependencies": {
-    "electron": "^42.2.0"
+  "devDependencies": {
+    "electron": "^42.2.0",
+    "electron-builder": "^26.15.0"
+  },
+  "build": {
+    "appId": "com.cricket.drs",
+    "productName": "Cricket DRS",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
   }
 }

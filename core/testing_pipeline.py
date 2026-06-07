@@ -23,6 +23,7 @@ from core.trajectory import TrajectoryPredictor
 TESTING_DATA_DIR = Path("data/testing")
 UPLOAD_DIR = TESTING_DATA_DIR / "uploads"
 OUTPUT_DIR = TESTING_DATA_DIR / "outputs"
+CALIBRATION_DIR = Path("data/calibration")
 
 
 @dataclass(slots=True)
@@ -40,9 +41,10 @@ class AnalysisOptions:
 @dataclass(slots=True)
 class ObjectEstimate:
     label: str
-    bbox: tuple[int, int, int, int] | None
+    bbox: dict[str, int] | None
     confidence: float
     source: str
+    is_estimated: bool = False
 
 
 class DeliveryTestingPipeline:
@@ -71,21 +73,23 @@ class DeliveryTestingPipeline:
         sync = self._synchronize(camera_results) if len(camera_results) == 2 else None
         fused = self._fuse_tracks(camera_results)
         replay_fps = min([cam["fps"] for cam in camera_results], default=0.0)
+        geometry_source = self._geometry_source()
         calibration = self.readiness.calibration()
         sync_readiness = self.readiness.sync(sync, replay_fps)
         decision = self._build_decision(fused, camera_results, bool(sync), calibration, sync_readiness)
         animation_path = self._write_clean_drs_animation(job_dir, job_id, fused, decision)
         report_path = self._write_report(job_dir, job_id, camera_results, decision, sync)
-        json_path = self._write_json(job_dir, job_id, camera_results, decision, sync)
+        json_path = self._write_json(job_dir, job_id, camera_results, decision, sync, geometry_source)
         csv_path = self._write_csv(job_dir, job_id, all_tracks)
 
         return {
             "job_id": job_id,
             "mode": "dual_camera" if len(video_paths) == 2 else "single_camera",
-            "status": "complete",
+            "status": "completed",
             "summary": decision,
             "sync": sync,
             "cameras": camera_results,
+            "geometry_source": geometry_source,
             "exports": {
                 "json": str(json_path),
                 "csv": str(csv_path),
@@ -117,7 +121,7 @@ class DeliveryTestingPipeline:
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 720)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         tracker = SingleBallByteTracker(fps=fps)
-        output_path = job_dir / f"camera_{camera_id}_analyzed.mp4"
+        output_path = job_dir / ("analyzed_video.mp4" if camera_id == 0 else f"camera_{camera_id}_analyzed.mp4")
         writer = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
 
         frame_id = 0
@@ -214,10 +218,18 @@ class DeliveryTestingPipeline:
 
     def _estimate_static_objects(self, frame: np.ndarray) -> list[ObjectEstimate]:
         h, w = frame.shape[:2]
-        stumps = ObjectEstimate("stumps", (int(w * 0.78), int(h * 0.38), int(w * 0.84), int(h * 0.82)), 0.35, "geometry_fallback")
-        pads = ObjectEstimate("pads", (int(w * 0.46), int(h * 0.42), int(w * 0.55), int(h * 0.86)), 0.25, "geometry_fallback")
-        bat = ObjectEstimate("bat", (int(w * 0.38), int(h * 0.35), int(w * 0.45), int(h * 0.84)), 0.20, "geometry_fallback")
+        stumps = ObjectEstimate("stumps", self._bbox_dict(w, h, 0.78, 0.38, 0.84, 0.82), 0.35, "geometry_fallback", True)
+        pads = ObjectEstimate("pads", self._bbox_dict(w, h, 0.46, 0.42, 0.55, 0.86), 0.25, "geometry_fallback", True)
+        bat = ObjectEstimate("bat", self._bbox_dict(w, h, 0.38, 0.35, 0.45, 0.84), 0.20, "geometry_fallback", True)
         return [stumps, pads, bat]
+
+    def _bbox_dict(self, width: int, height: int, x1: float, y1: float, x2: float, y2: float) -> dict[str, int]:
+        return {
+            "x": int(width * x1),
+            "y": int(height * y1),
+            "w": int(width * (x2 - x1)),
+            "h": int(height * (y2 - y1)),
+        }
 
     def _estimate_bounce(self, points: list[AssociatedTrackPoint]) -> tuple[int, int] | None:
         if len(points) < 5:
@@ -233,7 +245,7 @@ class DeliveryTestingPipeline:
     def _estimate_impact(self, points: list[AssociatedTrackPoint], pads: ObjectEstimate | None) -> tuple[int, int] | None:
         if not points or pads is None or pads.bbox is None:
             return None
-        x1, y1, x2, y2 = pads.bbox
+        x1, y1, x2, y2 = self._bbox_tuple(pads.bbox)
         for point in points:
             if x1 <= point.x <= x2 and y1 <= point.y <= y2:
                 return int(point.x), int(point.y)
@@ -247,17 +259,45 @@ class DeliveryTestingPipeline:
         impact: tuple[int, int] | None,
     ) -> None:
         colors = {"stumps": (60, 255, 120), "pads": (255, 210, 80), "bat": (80, 180, 255)}
+        estimated_color = (39, 159, 239)
         for label, item in objects.items():
             if item.bbox is None:
                 continue
-            cv2.rectangle(frame, item.bbox[:2], item.bbox[2:], colors.get(label, (220, 220, 220)), 2)
-            cv2.putText(frame, f"{label} {item.confidence:.0%}", (item.bbox[0], item.bbox[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colors.get(label, (220, 220, 220)), 1)
+            x1, y1, x2, y2 = self._bbox_tuple(item.bbox)
+            color = estimated_color if item.is_estimated else colors.get(label, (220, 220, 220))
+            if item.is_estimated:
+                self._draw_dashed_rect(frame, (x1, y1), (x2, y2), color, 2)
+            else:
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            prefix = "[EST] " if item.is_estimated else ""
+            cv2.putText(frame, f"{prefix}{label} {item.confidence:.0%}", (x1, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         if bounce:
             cv2.circle(frame, bounce, 9, (0, 220, 255), 2)
             cv2.putText(frame, "Bounce", (bounce[0] + 10, bounce[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2)
         if impact:
             cv2.circle(frame, impact, 10, (0, 80, 255), 2)
             cv2.putText(frame, "Impact", (impact[0] + 10, impact[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 80, 255), 2)
+
+    def _bbox_tuple(self, bbox: dict[str, int]) -> tuple[int, int, int, int]:
+        return bbox["x"], bbox["y"], bbox["x"] + bbox["w"], bbox["y"] + bbox["h"]
+
+    def _draw_dashed_rect(
+        self,
+        frame: np.ndarray,
+        start: tuple[int, int],
+        end: tuple[int, int],
+        color: tuple[int, int, int],
+        thickness: int,
+        dash: int = 10,
+    ) -> None:
+        x1, y1 = start
+        x2, y2 = end
+        for x in range(x1, x2, dash * 2):
+            cv2.line(frame, (x, y1), (min(x + dash, x2), y1), color, thickness)
+            cv2.line(frame, (x, y2), (min(x + dash, x2), y2), color, thickness)
+        for y in range(y1, y2, dash * 2):
+            cv2.line(frame, (x1, y), (x1, min(y + dash, y2)), color, thickness)
+            cv2.line(frame, (x2, y), (x2, min(y + dash, y2)), color, thickness)
 
     def _synchronize(self, camera_results: list[dict[str, Any]]) -> dict[str, Any]:
         frame_delta = abs(camera_results[0]["frames_processed"] - camera_results[1]["frames_processed"])
@@ -340,7 +380,7 @@ class DeliveryTestingPipeline:
         }
 
     def _write_clean_drs_animation(self, job_dir: Path, job_id: str, tracks: list[dict[str, Any]], decision: dict[str, Any]) -> Path:
-        path = job_dir / "clean_drs_animation.mp4"
+        path = job_dir / "animation.mp4"
         width, height, fps = 1280, 720, 30
         writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
         pitch_left, pitch_right = 210, 1070
@@ -426,13 +466,36 @@ class DeliveryTestingPipeline:
         track_rate = len(tracks) / max(1, len(detections))
         return round(min(1.0, (avg_detection * 0.55) + (detection_rate * 0.3) + (track_rate * 0.15)), 3)
 
-    def _write_json(self, job_dir: Path, job_id: str, cameras: list[dict[str, Any]], decision: dict[str, Any], sync: dict[str, Any] | None) -> Path:
-        path = job_dir / "tracking_data.json"
-        path.write_text(json.dumps({"job_id": job_id, "decision": decision, "sync": sync, "cameras": cameras}, indent=2), encoding="utf-8")
+    def _geometry_source(self) -> str:
+        return "calibration" if any(CALIBRATION_DIR.glob("*.json")) else "heuristic"
+
+    def _write_json(
+        self,
+        job_dir: Path,
+        job_id: str,
+        cameras: list[dict[str, Any]],
+        decision: dict[str, Any],
+        sync: dict[str, Any] | None,
+        geometry_source: str,
+    ) -> Path:
+        path = job_dir / "results.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "decision": decision,
+                    "sync": sync,
+                    "cameras": cameras,
+                    "geometry_source": geometry_source,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         return path
 
     def _write_csv(self, job_dir: Path, job_id: str, points: list[dict[str, Any]]) -> Path:
-        path = job_dir / "tracking_data.csv"
+        path = job_dir / "results.csv"
         fields = ["job_id", "camera_id", "frame_id", "timestamp_ms", "x", "y", "vx", "vy", "speed_px_s", "direction_deg", "confidence", "predicted"]
         with path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
@@ -442,7 +505,7 @@ class DeliveryTestingPipeline:
         return path
 
     def _write_report(self, job_dir: Path, job_id: str, cameras: list[dict[str, Any]], decision: dict[str, Any], sync: dict[str, Any] | None) -> Path:
-        path = job_dir / "drs_report.pdf"
+        path = job_dir / "report.pdf"
         try:
             from reportlab.lib.pagesizes import A4
             from reportlab.pdfgen import canvas

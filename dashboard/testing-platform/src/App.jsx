@@ -9,21 +9,22 @@ import {
   FileJson,
   FileText,
   Gauge,
+  ImageDown,
   RefreshCw,
   UploadCloud,
   Video,
 } from "lucide-react";
 import "./styles.css";
 
-const API = "http://127.0.0.1:8766";
+const API = "http://127.0.0.1:8765";
 
 const optionDefs = [
-  ["ball_detection", "Ball Detection"],
-  ["ball_tracking", "Ball Tracking"],
-  ["trajectory_prediction", "Trajectory Prediction"],
-  ["lbw_analysis", "LBW Analysis"],
-  ["edge_detection", "Edge Detection Analysis"],
-  ["replay_generation", "Replay Generation"],
+  ["ball_detection", "Ball detection"],
+  ["ball_tracking", "Ball tracking"],
+  ["trajectory_prediction", "Trajectory prediction"],
+  ["lbw_analysis", "LBW analysis"],
+  ["edge_detection", "Edge detection analysis"],
+  ["replay_generation", "Replay generation"],
 ];
 
 const defaultOptions = Object.fromEntries(optionDefs.map(([key]) => [key, true]));
@@ -35,19 +36,23 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [backend, setBackend] = useState("checking");
+  const [calibration, setCalibration] = useState(null);
   const pollRef = useRef(null);
+  const calibrationInputRef = useRef(null);
 
   useEffect(() => {
-    fetch(`${API}/api/testing/health`)
+    fetch(`${API}/api/health`)
       .then((res) => res.ok ? setBackend("online") : setBackend("offline"))
       .catch(() => setBackend("offline"));
+    refreshCalibrationStatus();
   }, []);
 
   useEffect(() => () => clearInterval(pollRef.current), []);
 
-  const mode = files.length === 2 ? "Dual Camera Mode" : "Single Camera Mode";
+  const mode = files.length === 2 ? "Dual camera mode" : "Single camera mode";
   const result = job?.result;
   const summary = result?.summary;
+  const fps = Number(result?.cameras?.[0]?.fps || 30);
 
   const upload = async () => {
     if (files.length < 1 || files.length > 2) return;
@@ -57,7 +62,7 @@ function App() {
     if (files[1]) form.append("video_b", files[1]);
     form.append("options_json", JSON.stringify(options));
 
-    const response = await fetch(`${API}/api/testing/jobs`, { method: "POST", body: form });
+    const response = await fetch(`${API}/api/test/upload`, { method: "POST", body: form });
     if (!response.ok) throw new Error("Upload failed");
     const created = await response.json();
     setJob(created);
@@ -67,15 +72,30 @@ function App() {
   };
 
   const pollJob = async (jobId) => {
-    const response = await fetch(`${API}/api/testing/jobs/${jobId}`);
+    const response = await fetch(`${API}/api/test/jobs/${jobId}`);
     if (!response.ok) return;
     const updated = await response.json();
     setJob(updated);
     if (updated.status === "processing") setProgress((old) => Math.min(88, old + 8));
-    if (updated.status === "complete" || updated.status === "failed") {
-      setProgress(updated.status === "complete" ? 100 : 0);
+    if (["completed", "review_inconclusive", "complete", "failed"].includes(updated.status)) {
+      setProgress(updated.status === "failed" ? 0 : 100);
       clearInterval(pollRef.current);
     }
+  };
+
+  const refreshCalibrationStatus = async () => {
+    const response = await fetch(`${API}/api/calibration/status`);
+    if (response.ok) setCalibration(await response.json());
+  };
+
+  const importCalibration = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch(`${API}/api/calibration/import`, { method: "POST", body: form });
+    if (response.ok) await refreshCalibrationStatus();
+    event.target.value = "";
   };
 
   const onDrop = (event) => {
@@ -89,6 +109,17 @@ function App() {
 
   return (
     <main className="app-shell">
+      <CalibrationBanner
+        status={calibration}
+        onImport={() => calibrationInputRef.current?.click()}
+      />
+      <input
+        ref={calibrationInputRef}
+        className="hidden-input"
+        type="file"
+        accept=".json,application/json"
+        onChange={importCalibration}
+      />
       <header className="topbar">
         <div className="brand">
           <div className="logo">DRS</div>
@@ -105,7 +136,7 @@ function App() {
 
       <section className="workspace">
         <aside className="left-panel">
-          <Panel title="Upload Section" icon={<UploadCloud size={18} />}>
+          <Panel title="Upload section" icon={<UploadCloud size={18} />}>
             <div
               className={`dropzone ${dragging ? "dragging" : ""}`}
               onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
@@ -136,11 +167,11 @@ function App() {
               <div style={{ width: `${progress}%` }} />
             </div>
             <button className="primary" disabled={files.length === 0 || backend !== "online"} onClick={upload}>
-              Process Delivery
+              Process delivery
             </button>
           </Panel>
 
-          <Panel title="Analysis Options" icon={<Activity size={18} />}>
+          <Panel title="Analysis options" icon={<Activity size={18} />}>
             <div className="option-grid">
               {optionDefs.map(([key, label]) => (
                 <label className="check" key={key}>
@@ -155,7 +186,7 @@ function App() {
             </div>
           </Panel>
 
-          <Panel title="Testing Mode" icon={<Camera size={18} />}>
+          <Panel title="Testing mode" icon={<Camera size={18} />}>
             <div className="mode-card">
               <strong>{mode}</strong>
               <p>{files.length === 2 ? "Synchronizes two feeds and fuses tracking confidence." : "Analyzes one feed with approximate depth and trajectory uncertainty."}</p>
@@ -164,54 +195,60 @@ function App() {
         </aside>
 
         <section className="center-panel">
-          <Panel title="Output Dashboard" icon={<BarChart3 size={18} />} fill>
-            <div className="video-grid">
-              <VideoPane title="Original Video" file={files[0]} />
-              <VideoPane title="Ball Tracking + Trajectory Overlay" src={result ? exportUrl("video") : null} />
-              <VideoPane title="Clean DRS Animation" src={result ? exportUrl("animation") : null} />
-            </div>
+          <Panel title="Output dashboard" icon={<BarChart3 size={18} />} fill>
+            {result?.geometry_source === "heuristic" && (
+              <div className="geometry-warning">
+                ⚠ Using estimated geometry -- import calibration data for accurate LBW decisions.
+              </div>
+            )}
+            <ReviewPlayer
+              originalFile={files[0]}
+              analyzedSrc={result ? exportUrl("video") : null}
+              animationSrc={result ? exportUrl("animation") : null}
+              fps={fps}
+            />
             <div className="evidence-grid">
-              <Metric label="Bounce Point" value={formatPoint(summary?.pitching_location)} />
-              <Metric label="Impact Point" value={formatPoint(summary?.impact_location)} />
-              <Metric label="Stump Collision" value={summary?.predicted_wicket_impact || "waiting"} />
+              <Metric label="Bounce point" value={formatPoint(summary?.pitching_location)} />
+              <Metric label="Impact point" value={formatPoint(summary?.impact_location)} />
+              <Metric label="Stump collision" value={summary?.predicted_wicket_impact || "waiting"} />
               <Metric label="Reliability" value={summary?.reliability || "waiting"} />
-              <Metric label="Slow Motion Replay" value={result ? "generated" : "waiting"} />
-              <Metric label="Frame Review" value={result ? `${result.cameras?.[0]?.frames_processed || 0} frames` : "waiting"} />
-              <Metric label="Sync Error" value={formatMs(result?.sync_status?.sync_error_ms)} />
-              <Metric label="Replay FPS" value={result?.sync_status?.replay_fps ? `${result.sync_status.replay_fps} fps` : "--"} />
+              <Metric label="Slow motion replay" value={result ? "generated" : "waiting"} />
+              <Metric label="Frame review" value={result ? `${result.cameras?.[0]?.frames_processed || 0} frames` : "waiting"} />
+              <Metric label="Sync error" value={formatMs(result?.sync_status?.sync_error_ms)} />
+              <Metric label="Replay fps" value={result?.sync_status?.replay_fps ? `${result.sync_status.replay_fps} fps` : "--"} />
             </div>
           </Panel>
         </section>
 
         <aside className="right-panel">
-          <Panel title="DRS Result Panel" icon={<Gauge size={18} />}>
+          <Panel title="DRS result panel" icon={<Gauge size={18} />}>
             <div className="decision">
-              <span>LBW Recommendation</span>
-              <strong className={summary?.lbw_recommendation === "OUT" ? "out" : ""}>{summary?.lbw_recommendation || "PENDING"}</strong>
+              <span>LBW recommendation</span>
+              <strong className={summary?.lbw_recommendation === "OUT" ? "out" : ""}>{formatDecision(summary?.lbw_recommendation)}</strong>
               <div className="confidence">
                 <div style={{ width: `${Math.round((summary?.confidence_score || 0) * 100)}%` }} />
               </div>
               <small>Confidence {summary ? `${Math.round(summary.confidence_score * 100)}%` : "--"}</small>
             </div>
-            <Metric label="Ball Speed" value={summary ? `${summary.ball_speed_kmh} km/h` : "--"} />
-            <Metric label="Pitching Location" value={formatPoint(summary?.pitching_location)} />
-            <Metric label="Impact Location" value={formatPoint(summary?.impact_location)} />
+            <Metric label="Ball speed" value={summary ? `${summary.ball_speed_kmh} km/h` : "--"} />
+            <Metric label="Pitching location" value={formatPoint(summary?.pitching_location)} />
+            <Metric label="Impact location" value={formatPoint(summary?.impact_location)} />
             <Metric label="Uncertainty" value={summary ? `${Math.round(summary.uncertainty * 100)}%` : "--"} />
-            <Metric label="Tracking Reliability" value={summary?.reliability || "--"} />
-            <Metric label="Failed Gates" value={summary?.gate?.failed_gates?.length ? summary.gate.failed_gates.join(", ") : "none"} />
+            <Metric label="Tracking reliability" value={summary?.reliability || "--"} />
+            <Metric label="Failed gates" value={summary?.gate?.failed_gates?.length ? summary.gate.failed_gates.join(", ") : "none"} />
           </Panel>
 
-          <Panel title="Export Features" icon={<Download size={18} />}>
+          <Panel title="Export features" icon={<Download size={18} />}>
             <div className="export-grid">
-              <ExportButton href={exportUrl("video")} disabled={!result} icon={<Video size={16} />} label="Analyzed Video" />
-              <ExportButton href={exportUrl("animation")} disabled={!result} icon={<Video size={16} />} label="Clean DRS Animation" />
-              <ExportButton href={exportUrl("pdf")} disabled={!result} icon={<FileText size={16} />} label="DRS Report PDF" />
+              <ExportButton href={exportUrl("video")} disabled={!result} icon={<Video size={16} />} label="Analyzed video" />
+              <ExportButton href={exportUrl("animation")} disabled={!result} icon={<Video size={16} />} label="Clean DRS animation" />
+              <ExportButton href={exportUrl("pdf")} disabled={!result} icon={<FileText size={16} />} label="DRS report PDF" />
               <ExportButton href={exportUrl("json")} disabled={!result} icon={<FileJson size={16} />} label="Tracking JSON" />
               <ExportButton href={exportUrl("csv")} disabled={!result} icon={<FileText size={16} />} label="Tracking CSV" />
             </div>
           </Panel>
 
-          <Panel title="Accuracy Gates" icon={<Activity size={18} />}>
+          <Panel title="Accuracy gates" icon={<Activity size={18} />}>
             <div className="quality-list">
               {(summary?.tracking_quality || []).map((item, index) => (
                 <div className="quality-card" key={index}>
@@ -226,9 +263,9 @@ function App() {
           </Panel>
 
           <Panel title="Readiness" icon={<CheckCircle2 size={18} />}>
-            <Readiness title="Detector Model" item={result?.model_status} type="model" />
-            <Readiness title="Camera Calibration" item={result?.calibration_status} type="calibration" />
-            <Readiness title="Camera Sync / Replay" item={result?.sync_status} type="sync" />
+            <Readiness title="Detector model" item={result?.model_status} type="model" />
+            <Readiness title="Camera calibration" item={result?.calibration_status} type="calibration" />
+            <Readiness title="Camera sync / replay" item={result?.sync_status} type="sync" />
           </Panel>
         </aside>
       </section>
@@ -240,7 +277,7 @@ function App() {
         </div>
         <div>
           <strong>Pipeline</strong>
-          <span>detect ball, bat, pads, stumps, track, sync, predict, export</span>
+          <span>Detect ball, bat, pads, stumps, track, sync, predict, export</span>
         </div>
         <button onClick={() => job?.job_id && pollJob(job.job_id)}>
           <RefreshCw size={16} /> Refresh
@@ -261,12 +298,145 @@ function Panel({ title, icon, children, fill }) {
   );
 }
 
-function VideoPane({ title, file, src }) {
-  const url = useMemo(() => file ? URL.createObjectURL(file) : src, [file, src]);
+function CalibrationBanner({ status, onImport }) {
+  if (!status) return null;
+  if (!status.calibrated) {
+    return (
+      <div className="calibration-banner warn">
+        <span>Calibration data missing -- geometry estimates only.</span>
+        <button type="button" onClick={onImport}>Import calibration</button>
+      </div>
+    );
+  }
+  return (
+    <div className="calibration-banner good">
+      <span>Calibrated · {status.camera_count} cameras · {formatDate(status.last_calibrated)}</span>
+    </div>
+  );
+}
+
+function ReviewPlayer({ originalFile, analyzedSrc, animationSrc, fps }) {
+  const originalRef = useRef(null);
+  const analyzedRef = useRef(null);
+  const [sideBySide, setSideBySide] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const originalUrl = useMemo(() => originalFile ? URL.createObjectURL(originalFile) : null, [originalFile]);
+  const frameStep = 1 / (Number(fps) || 30);
+  const primaryRef = sideBySide ? analyzedRef : (analyzedSrc ? analyzedRef : originalRef);
+
+  useEffect(() => () => {
+    if (originalUrl) URL.revokeObjectURL(originalUrl);
+  }, [originalUrl]);
+
+  const stepFrame = (direction) => {
+    [originalRef.current, analyzedRef.current].filter(Boolean).forEach((video) => {
+      video.currentTime = Math.max(0, video.currentTime + (direction * frameStep));
+    });
+  };
+
+  const setPlaybackSpeed = (value) => {
+    setSpeed(value);
+    [originalRef.current, analyzedRef.current].filter(Boolean).forEach((video) => {
+      video.playbackRate = value;
+    });
+  };
+
+  const saveFrame = () => {
+    const video = primaryRef.current;
+    if (!video || video.readyState < 2) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const context = canvas.getContext("2d");
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `frame_${Math.round(video.currentTime * 1000)}.png`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    }, "image/png");
+  };
+
+  const syncTime = (source, target) => {
+    if (!sideBySide || !source || !target) return;
+    if (Math.abs(target.currentTime - source.currentTime) > 0.08) {
+      target.currentTime = source.currentTime;
+    }
+  };
+
+  const syncPlay = (playing) => {
+    if (!sideBySide) return;
+    const videos = [originalRef.current, analyzedRef.current].filter(Boolean);
+    videos.forEach((video) => {
+      if (playing && video.paused) video.play();
+      if (!playing && !video.paused) video.pause();
+    });
+  };
+
+  return (
+    <div className="review-player">
+      <div className="review-controls">
+        <button type="button" onClick={() => stepFrame(-1)}>◀ Prev frame</button>
+        <button type="button" onClick={() => stepFrame(1)}>Next frame ▶</button>
+        <div className="speed-controls">
+          {[0.25, 0.5, 1, 2].map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={speed === value ? "active" : ""}
+              onClick={() => setPlaybackSpeed(value)}
+            >
+              {value}x
+            </button>
+          ))}
+        </div>
+        <button type="button" onClick={saveFrame}><ImageDown size={16} /> Save frame</button>
+        <button type="button" className={sideBySide ? "active" : ""} onClick={() => setSideBySide(!sideBySide)}>
+          Side by side
+        </button>
+      </div>
+      <div className={`video-grid ${sideBySide ? "side-by-side" : ""}`}>
+        <VideoPane
+          title="Original video"
+          src={originalUrl}
+          refProp={originalRef}
+          onTimeUpdate={() => syncTime(originalRef.current, analyzedRef.current)}
+          onPlay={() => syncPlay(true)}
+          onPause={() => syncPlay(false)}
+        />
+        <VideoPane
+          title="Ball tracking + trajectory overlay"
+          src={analyzedSrc}
+          refProp={analyzedRef}
+          onTimeUpdate={() => syncTime(analyzedRef.current, originalRef.current)}
+          onPlay={() => syncPlay(true)}
+          onPause={() => syncPlay(false)}
+        />
+        {!sideBySide && <VideoPane title="Clean DRS animation" src={animationSrc} />}
+      </div>
+    </div>
+  );
+}
+
+function VideoPane({ title, src, refProp, onTimeUpdate, onPlay, onPause }) {
   return (
     <div className="video-pane">
       <div>{title}</div>
-      {url ? <video src={url} controls muted /> : <div className="empty-video">Video appears after upload/analysis</div>}
+      {src ? (
+        <video
+          ref={refProp}
+          src={src}
+          controls
+          muted
+          onTimeUpdate={onTimeUpdate}
+          onPlay={onPlay}
+          onPause={onPause}
+        />
+      ) : (
+        <div className="empty-video">Video appears after upload/analysis</div>
+      )}
     </div>
   );
 }
@@ -333,6 +503,16 @@ function fmtPct(value) {
 
 function fmtNum(value) {
   return value === null || value === undefined ? "--" : Number(value).toFixed(2);
+}
+
+function formatDate(value) {
+  if (!value) return "date unknown";
+  return new Date(value).toLocaleString();
+}
+
+function formatDecision(value) {
+  if (!value) return "Pending";
+  return String(value).toLowerCase().replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 createRoot(document.getElementById("root")).render(<App />);

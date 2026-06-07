@@ -31,12 +31,51 @@ button, input, a {
 .app-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: clamp(10px, 1vw, 16px);
   padding: clamp(10px, 1.2vw, 18px);
   background:
     radial-gradient(circle at 16% 0%, rgba(255, 107, 53, 0.16), transparent 34%),
     linear-gradient(135deg, #f8f9fb, var(--lab-bg) 58%, #e9edf5);
+}
+
+.hidden-input {
+  display: none;
+}
+
+.calibration-banner, .geometry-warning {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-weight: 800;
+}
+
+.calibration-banner.warn, .geometry-warning {
+  color: #4a2a03;
+  background: #ffe0ad;
+  border: 1px solid #ef9f27;
+}
+
+.calibration-banner.good {
+  color: #103d24;
+  background: #dff5e7;
+  border: 1px solid #7cc999;
+}
+
+.calibration-banner button {
+  border: 1px solid rgba(74, 42, 3, 0.24);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: #fff7e8;
+  color: #4a2a03;
+  font-weight: 900;
+  cursor: pointer;
 }
 
 .topbar, .bottom-bar, .panel {
@@ -263,12 +302,57 @@ p {
   border: 1px solid rgba(255, 107, 53, 0.20);
 }
 
+.review-player {
+  display: grid;
+  gap: 10px;
+}
+
+.review-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.review-controls button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(117, 167, 226, 0.34);
+  border-radius: 8px;
+  padding: 8px 11px;
+  color: var(--primary);
+  background: #f7f8fb;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.review-controls button.active {
+  color: #ffffff;
+  background: var(--primary);
+}
+
+.speed-controls {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid rgba(117, 167, 226, 0.24);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
 .video-grid {
   height: min(56vh, 540px);
   min-height: 300px;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+.video-grid.side-by-side {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .video-pane {

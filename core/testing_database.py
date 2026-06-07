@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +107,29 @@ class TestingDatabase:
                 """,
                 rows,
             )
+
+    def cleanup_stale_processing_jobs(self, older_than_minutes: int = 15) -> tuple[int, list[str]]:
+        cutoff_ms = (datetime.now() - timedelta(minutes=older_than_minutes)).timestamp() * 1000.0
+        error = "Recovered: server restarted during processing"
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id FROM analysis_jobs
+                WHERE status = ? AND updated_at_ms < ?
+                """,
+                ("processing", cutoff_ms),
+            ).fetchall()
+            job_ids = [str(row["id"]) for row in rows]
+            if job_ids:
+                conn.executemany(
+                    """
+                    UPDATE analysis_jobs
+                    SET status = ?, error = ?, updated_at_ms = ?
+                    WHERE id = ?
+                    """,
+                    [("failed", error, time.time() * 1000.0, job_id) for job_id in job_ids],
+                )
+        return len(job_ids), job_ids
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:

@@ -37,6 +37,8 @@ class VideoFrame:
     frame_id: int
     timestamp_ms: float
     frame: np.ndarray
+    captured_at: float = 0.0
+    cv2_timestamp: float = 0.0
 
 
 class CameraWorker(threading.Thread):
@@ -86,7 +88,7 @@ class CameraWorker(threading.Thread):
             if not ok:
                 time.sleep(0.003)
                 continue
-            self._ingest(frame, started)
+            self._ingest(frame, started, self._capture.get(cv2.CAP_PROP_POS_MSEC))
 
         self._capture.release()
 
@@ -101,13 +103,14 @@ class CameraWorker(threading.Thread):
             y = int(FRAME_HEIGHT * (0.30 + 0.35 * ((np.cos(t * 2.8) + 1.0) / 2.0)))
             cv2.circle(frame, (x, y), 13, (245, 245, 245), -1, cv2.LINE_AA)
             cv2.putText(frame, f"SYNTHETIC CAM {self.camera_id}", (24, 86), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 255, 255), 2)
-            self._ingest(frame, started)
+            self._ingest(frame, started, t * 1000.0)
             time.sleep(interval)
 
-    def _ingest(self, frame: np.ndarray, started: float) -> None:
+    def _ingest(self, frame: np.ndarray, started: float, cv2_timestamp: float) -> None:
         timestamp_ms = time.time() * 1000.0
+        captured_at = time.perf_counter()
         stamped = draw_timestamp(frame, timestamp_ms, self.camera_id)
-        item = VideoFrame(self.camera_id, self._frame_id, timestamp_ms, stamped)
+        item = VideoFrame(self.camera_id, self._frame_id, timestamp_ms, stamped, captured_at, cv2_timestamp)
         self._frame_id += 1
         self.buffer.append(item)
         elapsed = max(0.001, time.perf_counter() - started)
@@ -215,6 +218,7 @@ class CameraManager:
         self.writer: Optional[SyncVideoWriter] = None
         self.synchronizer = Synchronizer()
         self.recording_dir: Optional[Path] = None
+        self._sync_log_counter = 0
 
     def start(self) -> None:
         buffer_frames = int(BUFFER_SECONDS * TARGET_FPS)
@@ -238,6 +242,7 @@ class CameraManager:
         frames = {camera_id: worker.latest() for camera_id, worker in self.workers.items()}
         frames = {camera_id: item for camera_id, item in frames.items() if item is not None}
         aligned, _ = self.synchronizer.align_latest(frames)
+        self._log_sync_delta(frames)
         if self.writer and write_recording:
             for item in aligned.values():
                 self.writer.write(item)
@@ -247,6 +252,7 @@ class CameraManager:
         frames = {camera_id: worker.latest() for camera_id, worker in self.workers.items()}
         frames = {camera_id: item for camera_id, item in frames.items() if item is not None}
         aligned, _ = self.synchronizer.align_latest(frames)
+        self._log_sync_delta(frames)
         if self.writer and write_recording:
             for item in aligned.values():
                 self.writer.write(item)
@@ -278,3 +284,17 @@ class CameraManager:
             }
             for camera_id, worker in self.workers.items()
         }
+
+    def _log_sync_delta(self, frames: dict[int, VideoFrame]) -> None:
+        if len(frames) < 2:
+            return
+        self._sync_log_counter += 1
+        if self._sync_log_counter % 30 != 0:
+            return
+        timestamps = [item.captured_at for item in frames.values()]
+        delta = max(timestamps) - min(timestamps)
+        message = "[DRS] Multi-camera sync delta: {:.1f}ms".format(delta * 1000.0)
+        if delta > 0.050:
+            log.warning("{} -- camera_sync gate FAIL", message)
+        else:
+            log.info(message)

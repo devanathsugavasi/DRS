@@ -24,7 +24,10 @@ from utils.helpers import draw_bounding_box, save_csv, save_json, timestamp_str
 from utils.logger import get_logger
 
 log = get_logger("ball_detector")
-COCO_SPORTS_BALL_CLASS_ID = 32
+CRICKET_MODEL_PATH = Path("models/cricket_ball_yolov8.pt")
+GENERIC_YOLO_MODEL_PATH = Path("yolo11l.pt")
+BALL_CLASS_IDS = {0}
+SPORTS_BALL_CLASS_ID = 32
 
 
 @dataclass(slots=True)
@@ -91,6 +94,8 @@ class BallDetector:
         self.preprocessor = FramePreprocessor()
         self.model: Any = None
         self.model_readiness: ModelReadiness | None = None
+        self.active_model_name = "none"
+        self.ball_class_ids = set(BALL_CLASS_IDS)
         self.using_coco_fallback = False
         self.results_log: list[dict[str, Any]] = []
         default_path = Path(YOLO_MODEL_PATH)
@@ -104,14 +109,37 @@ class BallDetector:
             log.warning("ultralytics is not installed; detector will return empty results")
             return
 
-        selected_path, readiness = DetectorModelSelector().select(model_path)
+        global BALL_CLASS_IDS
+        if model_path is None:
+            if CRICKET_MODEL_PATH.exists():
+                selected_path, readiness = DetectorModelSelector().select(CRICKET_MODEL_PATH)
+                BALL_CLASS_IDS = {0}
+                self.using_coco_fallback = False
+                log.info("[DRS] Using cricket-specific model -- class filter: {}", BALL_CLASS_IDS)
+            elif GENERIC_YOLO_MODEL_PATH.exists():
+                selected_path, readiness = DetectorModelSelector().select(GENERIC_YOLO_MODEL_PATH)
+                BALL_CLASS_IDS = {SPORTS_BALL_CLASS_ID}
+                self.using_coco_fallback = True
+                log.warning(
+                    "[DRS] Cricket model not found -- falling back to generic YOLO. Detection quality may be lower."
+                )
+            else:
+                selected_path, readiness = DetectorModelSelector().select(None)
+                BALL_CLASS_IDS = {0}
+                self.using_coco_fallback = False
+        else:
+            selected_path, readiness = DetectorModelSelector().select(model_path)
+            BALL_CLASS_IDS = {0}
+            self.using_coco_fallback = False
         self.model_readiness = readiness
+        self.ball_class_ids = set(BALL_CLASS_IDS)
+        self.active_model_name = selected_path.name
         if selected_path.exists():
             self.model = YOLO(str(selected_path))
-            log.info("Loaded {} detector from {}", readiness.detector_family, selected_path)
+            log.info("[DRS] Loaded {} detector from {}", readiness.detector_family, selected_path)
         else:
             self.model = None
-            log.warning("No local detector model found; add YOLO11x/YOLO11l/YOLOv8x/custom cricket model")
+            log.warning("[DRS] No local detector model found; add a cricket model under models/")
 
         if USE_TENSORRT and self.model is not None:
             try:
@@ -145,19 +173,23 @@ class BallDetector:
         detections: list[BallDetection] = []
         for result in raw_results:
             for box in result.boxes:
-                class_id = int(box.cls[0])
-                if self.using_coco_fallback and class_id != COCO_SPORTS_BALL_CLASS_ID:
+                if not self._is_ball_class(box):
                     continue
                 x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
                 detections.append(
                     BallDetection(frame_id, timestamp_ms, x1, y1, x2, y2, float(box.conf[0]), camera_id)
                 )
+        if raw_results and not detections:
+            log.warning("[DRS] No valid ball-class detections found after filtering classes {}", self.ball_class_ids)
 
         detections.sort(key=lambda item: item.confidence, reverse=True)
         output = DetectionResult(frame_id, timestamp_ms, camera_id, detections, inference_ms)
         if self.export_results:
             self.results_log.extend(self._rows(output))
         return output
+
+    def _is_ball_class(self, box: Any) -> bool:
+        return int(box.cls[0]) in self.ball_class_ids
 
     def annotate(self, frame: np.ndarray, result: DetectionResult) -> np.ndarray:
         for detection in result.detections:
