@@ -1,0 +1,12 @@
+{
+  "cricket_ball_yolov8.pt": {
+    "source": "https://huggingface.co/ashishgimekar/cricket-ball-yolo",
+    "map50": null,
+    "map50_95": null,
+    "ball_recall": null,
+    "precision": null,
+    "inference_ms": null,
+    "usable": false,
+    "reason": "Public cricket-ball weights are installed for working demos, but local validation metrics are not available yet. Run scripts/evaluate_yolo_drs.py on a held-out cricket dataset."
+  }
+}

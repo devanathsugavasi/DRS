@@ -65,6 +65,17 @@ cd ..\..
 
 ## Run
 
+One-command offline demo with public baseline detector, two synchronized synthetic videos, FastAPI testing backend, and React testing platform:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_working_demo.ps1
+```
+
+Then open `http://127.0.0.1:5173` and upload:
+
+- `data\testing\demo_delivery_cam0.mp4`
+- `data\testing\demo_delivery_cam1.mp4`
+
 Live FastAPI backend for Electron:
 
 ```powershell
@@ -109,16 +120,26 @@ Copy `.env.example` to `.env` and adjust ports, log level, sync tolerance, repla
 
 The detector selector prefers:
 
-1. `models/yolo11x.pt`
-2. `models/yolo11l.pt`
-3. `models/yolov8x.pt`
-4. `models/cricket_ball_yolov8.pt`
+1. `yolo11x.pt`
+2. `models/yolo11x.pt`
+3. `yolo11l.pt`
+4. `models/yolo11l.pt`
+5. `models/yolov8x.pt`
+6. `models/cricket_ball_yolov8.pt`
 
 Model files are ignored by default except committed placeholders. Add validated model metrics with:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\evaluate_yolo_drs.py --model models\training_runs\drs_yolov8\weights\best.pt
 ```
+
+Install the public cricket-ball baseline for immediate testing:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\bootstrap_public_assets.py
+```
+
+Public model and dataset notes are in `docs\PUBLIC_BASELINES.md`. The public baseline is for working demos and pipeline testing; it is not treated as validated tournament evidence until local held-out metrics are measured.
 
 ## Calibration
 

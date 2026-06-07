@@ -157,8 +157,8 @@ def _run_job(job_id: str, videos: list[Path], options: AnalysisOptions) -> None:
 
 def run_testing_api(host: str, port: int) -> None:
     import uvicorn
-    
+
     log.info(f"Starting Cricket DRS Testing API on http://{host}:{port}")
     log.info("Loading ball detection model...")
-    
+
     uvicorn.run(create_testing_app(), host=host, port=port)

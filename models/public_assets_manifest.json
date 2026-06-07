@@ -1,0 +1,26 @@
+{
+  "readiness_metrics": "models\\model_evaluation.json",
+  "assets": [
+    {
+      "name": "Cricket ball YOLOv8 public baseline",
+      "source": "https://huggingface.co/ashishgimekar/cricket-ball-yolo",
+      "destination": "models\\cricket_ball_yolov8.pt",
+      "status": "installed",
+      "note": "Single-class cricket ball detector for immediate pipeline testing; not enough by itself for LBW decisions."
+    },
+    {
+      "name": "Cricket Ball Dataset for YOLO",
+      "source": "https://www.kaggle.com/datasets/kushagra3204/cricket-ball-dataset-for-yolo",
+      "destination": "data/datasets/cricket_ball_data",
+      "status": "manual_download_required",
+      "note": "1778 annotated YOLOv8 images, CC0/Public Domain. Use Kaggle credentials to download."
+    },
+    {
+      "name": "Roboflow Cricket Ball Tracking DATASET",
+      "source": "https://universe.roboflow.com/cricket-ball-tracking-dataset",
+      "destination": "data/datasets/roboflow_cricket_ball_tracking",
+      "status": "manual_download_required",
+      "note": "Large public tracking/detection dataset family; verify license/API key before training."
+    }
+  ]
+}

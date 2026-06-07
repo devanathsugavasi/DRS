@@ -10,6 +10,7 @@ __pycache__/
 .env.*
 !.env.example
 /package-lock.json
+/dashboard/package-lock.json
 
 data/logs/
 data/recordings/

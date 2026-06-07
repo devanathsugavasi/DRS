@@ -9,7 +9,9 @@ from typing import Any
 
 
 MODEL_CANDIDATES = [
+    ("yolo11x", Path("yolo11x.pt")),
     ("yolo11x", Path("models/yolo11x.pt")),
+    ("yolo11l", Path("yolo11l.pt")),
     ("yolo11l", Path("models/yolo11l.pt")),
     ("yolov8x", Path("models/yolov8x.pt")),
     ("custom_cricket", Path("models/cricket_ball_yolov8.pt")),
