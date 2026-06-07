@@ -1,4 +1,4 @@
-# Cricket DRS - Professional Decision Review System
+# Cricket DRS - Decision Review System
 
 [![DRS CI](https://github.com/NikhilSai-4409/DRS/actions/workflows/ci.yml/badge.svg)](https://github.com/NikhilSai-4409/DRS/actions/workflows/ci.yml)
 
