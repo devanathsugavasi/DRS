@@ -140,3 +140,20 @@ class TestingDatabase:
         item["options"] = json.loads(item.pop("options_json"))
         item["result"] = json.loads(item["result_json"]) if item.get("result_json") else None
         return item
+
+    def get_latest_completed_job(self) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM analysis_jobs
+                WHERE status IN ('completed', 'review_inconclusive')
+                ORDER BY updated_at_ms DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["options"] = json.loads(item.pop("options_json"))
+        item["result"] = json.loads(item["result_json"]) if item.get("result_json") else None
+        return item

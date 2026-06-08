@@ -10,63 +10,123 @@
     <main class="shell">
       <header class="top-bar">
         <div class="brand">
-          <strong>Cricket DRS dashboard</strong>
-          <span id="engine-state">Engine starting</span>
+          <div class="brand-mark">DRS</div>
+          <div>
+            <strong>Professional DRS prototype</strong>
+            <span id="engine-state">Engine starting</span>
+          </div>
         </div>
-        <div class="live-indicator"><i></i><span>Live</span></div>
+        <div id="live-indicator" class="live-indicator offline"><i></i><span>Offline</span></div>
+        <div id="mode-banner" class="mode-banner">Mode A - visible-spectrum approximation</div>
         <div id="camera-pills" class="camera-pills"></div>
-        <button id="settings-button" type="button">Settings</button>
+        <button id="mode-toggle" type="button" title="Switch visible/demo thermal mode">Mode</button>
+        <button id="testing-platform-button" type="button" title="Open embedded React testing platform">Testing</button>
+        <button id="calibration-button" type="button">Calibration</button>
       </header>
 
-      <section class="stage">
-        <section class="left-column">
-          <div class="camera-grid">
-            <article class="camera-panel" id="camera-panel-1">
-              <img id="camera-1" alt="Camera 1 feed" />
-              <div class="camera-label">Camera 1</div>
-              <div class="camera-fps" id="camera-1-fps">-- fps</div>
-            </article>
-            <article class="camera-panel" id="camera-panel-2">
-              <img id="camera-2" alt="Camera 2 feed" />
-              <div class="camera-label">Camera 2</div>
-              <div class="camera-fps" id="camera-2-fps">-- fps</div>
-            </article>
-          </div>
+      <section class="workspace">
+        <aside class="left-rail">
+          <section class="rail-header">
+            <strong>Camera matrix</strong>
+            <span id="camera-count">0 / 6 connected</span>
+          </section>
+          <section id="camera-grid" class="camera-grid" aria-label="Adaptive camera and analysis grid"></section>
+        </aside>
 
+        <section class="center-stage">
           <article class="trajectory-panel">
             <header>
-              <span>Ball trajectory</span>
-              <strong id="trajectory-status">Waiting</strong>
+              <div>
+                <span>3D trajectory window</span>
+                <small id="trajectory-status">Waiting for review data</small>
+              </div>
+              <div class="scene-tools">
+                <button id="replay-trajectory" type="button">Replay</button>
+                <button id="reset-camera" type="button">Reset View</button>
+              </div>
             </header>
-            <canvas id="trajectory-canvas" width="500" height="200"></canvas>
+            <div id="trajectory-scene" class="trajectory-scene"></div>
+          </article>
+
+          <article class="decision-panel">
+            <section class="decision-main">
+              <span id="decision-badge" class="badge waiting">Waiting</span>
+              <h1 id="decision-title">Waiting for appeal</h1>
+              <div id="broadcast-overlay" class="broadcast-overlay waiting">WAITING</div>
+            </section>
+            <section class="decision-actions">
+              <button id="request-review" type="button" title="Shortcut: R">Request Review</button>
+              <button id="confirm-out" type="button" class="danger" title="Shortcut: O">Confirm OUT</button>
+              <button id="confirm-not-out" type="button" class="success" title="Shortcut: N">Confirm NOT OUT</button>
+            </section>
+            <section class="decision-metrics">
+              <div><span>Overall confidence</span><strong id="overall-confidence">--</strong></div>
+              <div><span>Impact</span><strong id="impact-location">--</strong></div>
+              <div><span>Wicket prediction</span><strong id="wicket-zone">--</strong></div>
+              <div><span>Speed</span><strong id="ball-speed">--</strong></div>
+            </section>
           </article>
         </section>
 
-        <aside class="decision-column">
-          <section class="decision-card">
-            <span id="decision-badge" class="badge waiting">Waiting</span>
-            <h1 id="decision-title">Waiting for appeal</h1>
-            <dl>
-              <div><dt>Ball confidence</dt><dd id="ball-confidence">--</dd></div>
-              <div><dt>Impact location</dt><dd id="impact-location">--</dd></div>
-              <div><dt>Wicket zone</dt><dd id="wicket-zone">--</dd></div>
-              <div><dt>Ball speed</dt><dd id="ball-speed">--</dd></div>
-            </dl>
+        <aside class="right-rail">
+          <section class="panel timeline-panel">
+            <header><strong>Review timeline</strong></header>
+            <div id="decision-timeline" class="decision-timeline"></div>
           </section>
 
-          <section class="appeal-card">
-            <button id="request-review" type="button">Request review</button>
-            <button id="confirm-out" type="button">Confirm OUT</button>
-            <button id="confirm-not-out" type="button">Confirm NOT OUT</button>
+          <section class="panel explanation-panel">
+            <header><strong>Decision explanation</strong></header>
+            <p id="decision-explanation">Awaiting appeal sequence.</p>
           </section>
 
-          <section class="system-card">
-            <h2>System</h2>
-            <pre id="system-log">Dashboard loaded.</pre>
+          <section class="panel confidence-panel">
+            <header><strong>Confidence breakdown</strong></header>
+            <div id="confidence-breakdown" class="confidence-breakdown"></div>
+          </section>
+
+          <section class="panel evidence-panel">
+            <header><strong>HotSpot</strong><span id="hotspot-mode">Visible mode</span></header>
+            <div id="hotspot-view" class="thermal-view">No contact heatmap yet</div>
+          </section>
+
+          <section class="panel evidence-panel">
+            <header><strong>UltraEdge</strong><span>Audio edge</span></header>
+            <canvas id="ultraedge-canvas" width="420" height="120"></canvas>
           </section>
         </aside>
       </section>
+
+      <footer class="bottom-deck">
+        <section class="replay-strip">
+          <button id="replay-back" type="button">Prev</button>
+          <input id="frame-timeline" type="range" min="0" max="100" value="0" />
+          <button id="replay-forward" type="button">Next</button>
+          <span id="frame-label">Frame 0</span>
+        </section>
+
+        <section class="health-strip">
+          <strong>System health</strong>
+          <div id="health-grid" class="health-grid"></div>
+        </section>
+
+        <section class="history-strip">
+          <header>
+            <strong>Review center</strong>
+            <span>History</span>
+          </header>
+          <div id="review-history" class="review-history"></div>
+        </section>
+      </footer>
+
+      <dialog id="testing-platform-dialog" class="testing-dialog">
+        <header>
+          <strong>React testing platform</strong>
+          <button id="close-testing-platform" type="button" aria-label="Close testing platform">x</button>
+        </header>
+        <iframe id="testing-platform-frame" title="Embedded React testing platform"></iframe>
+      </dialog>
     </main>
-    <script src="renderer.js"></script>
+
+    <script type="module" src="renderer.js"></script>
   </body>
 </html>

@@ -35,5 +35,8 @@
     "linux": {
       "target": "AppImage"
     }
+  },
+  "dependencies": {
+    "three": "^0.184.0"
   }
 }
