@@ -52,6 +52,10 @@ const els = {
   resetCamera: document.getElementById("reset-camera"),
   replayBack: document.getElementById("replay-back"),
   replayForward: document.getElementById("replay-forward"),
+  replayPlay: document.getElementById("replay-play"),
+  replayPause: document.getElementById("replay-pause"),
+  replaySpeed: document.getElementById("replay-speed"),
+  replayExport: document.getElementById("replay-export"),
   testingButton: document.getElementById("testing-platform-button"),
   testingDialog: document.getElementById("testing-platform-dialog"),
   testingFrame: document.getElementById("testing-platform-frame"),
@@ -90,6 +94,8 @@ async function refreshSystemHealth() {
       ["FPS", Object.values(health.camera_fps || {}).map((value) => Number(value).toFixed(1)).join(" / ") || "--"],
       ["Drops", sumValues(health.frame_drops)],
       ["Latency", `${health.latency_ms} ms`],
+      ["Calibration", health.calibration?.readiness || "missing"],
+      ["Tracking", trackingHealthLabel(health.camera_health)],
       ["Storage", `${health.storage?.free_gb ?? "--"} GB free`],
       ["Network", health.network?.status || "--"],
     ].map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("");
@@ -130,8 +136,10 @@ function renderCameraGrid() {
   )).join("");
 
   const panels = [];
-  for (let cameraId = 1; cameraId <= MAX_CAMERAS; cameraId += 1) {
-    const camera = state.cameras.find((item) => item.id === cameraId);
+  const slots = [...state.cameras];
+  while (slots.length < MAX_CAMERAS) slots.push(null);
+  slots.slice(0, MAX_CAMERAS).forEach((camera, index) => {
+    const cameraId = camera?.id ?? index;
     if (camera?.connected) {
       panels.push(`
         <article class="camera-panel ${camera.status}" data-camera-id="${cameraId}">
@@ -142,9 +150,9 @@ function renderCameraGrid() {
         </article>
       `);
     } else {
-      panels.push(renderAnalysisPanel(cameraId, connected.length));
+      panels.push(renderAnalysisPanel(index + 1, connected.length));
     }
-  }
+  });
   els.cameraGrid.className = `camera-grid count-${Math.max(1, connected.length)}`;
   els.cameraGrid.innerHTML = panels.join("");
   els.cameraGrid.querySelectorAll(".camera-panel img").forEach((img) => {
@@ -178,6 +186,15 @@ function refreshCameraFrames() {
   state.cameras.filter((camera) => camera.connected).forEach((camera) => {
     const img = document.getElementById(`camera-${camera.id}`);
     if (img) img.src = `${API_BASE}/api/live/${camera.id}.jpg?t=${stamp}`;
+  });
+}
+
+function renderLiveFrames(frames) {
+  Object.entries(frames || {}).forEach(([cameraId, frame]) => {
+    const img = document.getElementById(`camera-${cameraId}`);
+    if (img && frame.jpeg_base64) {
+      img.src = `data:image/jpeg;base64,${frame.jpeg_base64}`;
+    }
   });
 }
 
@@ -424,6 +441,29 @@ function replayTrajectory() {
   }, 90);
 }
 
+async function replayControl(action, extra = {}) {
+  const payload = await jsonFetch("/api/replay/control", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, ...extra }),
+  });
+  renderReplayState(payload);
+}
+
+function renderReplayState(payload) {
+  if (!payload) return;
+  const total = Math.max(1, Number(payload.total_frames || 100) - 1);
+  els.frameTimeline.max = String(total);
+  els.frameTimeline.value = String(Math.min(total, Number(payload.cursor || 0)));
+  els.frameLabel.textContent = `Frame ${els.frameTimeline.value} | ${payload.playing ? "Playing" : "Paused"} | ${Number(payload.speed || 1)}x`;
+}
+
+async function exportReplay() {
+  els.frameLabel.textContent = "Exporting replay...";
+  const payload = await jsonFetch("/api/replay/export", { method: "POST" });
+  els.frameLabel.textContent = `Exported: ${payload.path}`;
+}
+
 function drawUltraEdge(decision) {
   const ctx = els.ultraedge.getContext("2d");
   const { width, height } = els.ultraedge;
@@ -469,13 +509,13 @@ function connectChannel(channel) {
       if (channel === "live" && payload.cameras) {
         state.cameras = payload.cameras;
         renderCameraGrid();
-        refreshCameraFrames();
+        renderLiveFrames(payload.frames);
       }
       if (channel === "trajectory" && payload.trajectory) {
         renderDecision({ ...state.decision, trajectory: payload.trajectory });
       }
-      if (channel === "review" && payload.type === "job_processing") {
-        els.explanation.textContent = `Processing job ${payload.job_id}...`;
+      if (channel === "replay" && payload.replay) {
+        renderReplayState(payload.replay);
       }
     } catch {}
   });
@@ -485,7 +525,7 @@ function connectChannel(channel) {
 }
 
 function connectWebSockets() {
-  ["system", "decision", "trajectory", "review", "replay", "live"].forEach(connectChannel);
+  ["system", "decision", "trajectory", "replay", "live"].forEach(connectChannel);
 }
 
 function renderSystemPayload(health) {
@@ -496,6 +536,8 @@ function renderSystemPayload(health) {
     ["FPS", Object.values(health.camera_fps || {}).map((value) => Number(value).toFixed(1)).join(" / ") || "--"],
     ["Drops", sumValues(health.frame_drops)],
     ["Latency", `${health.latency_ms} ms`],
+    ["Calibration", health.calibration?.readiness || "missing"],
+    ["Tracking", trackingHealthLabel(health.camera_health)],
     ["Storage", `${health.storage?.free_gb ?? "--"} GB free`],
     ["Network", health.network?.status || "--"],
   ].map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("");
@@ -559,6 +601,14 @@ function sumValues(values) {
   return Object.values(values || {}).reduce((total, value) => total + Number(value || 0), 0);
 }
 
+function trackingHealthLabel(cameras) {
+  if (!Array.isArray(cameras) || !cameras.length) return "--";
+  const score = cameras.reduce((total, camera) => total + Number(camera.health_score || 0), 0) / cameras.length;
+  if (score >= 0.8) return "high";
+  if (score >= 0.55) return "medium";
+  return "low";
+}
+
 els.requestReview.addEventListener("click", requestReview);
 els.confirmOut.addEventListener("click", () => confirmDecision("OUT"));
 els.confirmNotOut.addEventListener("click", () => confirmDecision("NOT_OUT"));
@@ -566,9 +616,13 @@ els.calibrationButton.addEventListener("click", () => { window.location.href = "
 els.modeToggle.addEventListener("click", toggleMode);
 els.replayTrajectory.addEventListener("click", replayTrajectory);
 els.resetCamera.addEventListener("click", resetThreeCamera);
-els.replayBack.addEventListener("click", () => { els.frameTimeline.value = String(Math.max(0, Number(els.frameTimeline.value) - 1)); });
-els.replayForward.addEventListener("click", () => { els.frameTimeline.value = String(Math.min(100, Number(els.frameTimeline.value) + 1)); });
-els.frameTimeline.addEventListener("input", () => { els.frameLabel.textContent = `Frame ${els.frameTimeline.value}`; });
+els.replayPlay.addEventListener("click", () => replayControl("play", { speed: Number(els.replaySpeed.value) }));
+els.replayPause.addEventListener("click", () => replayControl("pause"));
+els.replayBack.addEventListener("click", () => replayControl("step_back"));
+els.replayForward.addEventListener("click", () => replayControl("step_forward"));
+els.replaySpeed.addEventListener("change", () => replayControl("speed", { speed: Number(els.replaySpeed.value) }));
+els.replayExport.addEventListener("click", exportReplay);
+els.frameTimeline.addEventListener("input", () => replayControl("seek", { frame_index: Number(els.frameTimeline.value) }));
 els.testingButton.addEventListener("click", async () => {
   const payload = window.drs?.getTestingPlatformUrl
     ? await window.drs.getTestingPlatformUrl()

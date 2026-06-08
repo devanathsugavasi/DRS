@@ -26,6 +26,32 @@
       "renderer/**",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "../../core",
+        "to": "backend/core"
+      },
+      {
+        "from": "../../config",
+        "to": "backend/config"
+      },
+      {
+        "from": "../../utils",
+        "to": "backend/utils"
+      },
+      {
+        "from": "../../models",
+        "to": "backend/models"
+      },
+      {
+        "from": "../../requirements.txt",
+        "to": "backend/requirements.txt"
+      },
+      {
+        "from": "../../pyproject.toml",
+        "to": "backend/pyproject.toml"
+      }
+    ],
     "win": {
       "target": "nsis"
     },

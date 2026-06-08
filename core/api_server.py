@@ -3,22 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
+import base64
+import json
+import math
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from pathlib import Path
 from typing import Optional
 
 import cv2
+import numpy as np
 from fastapi import Body, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 
+from config.settings import CAMERA_IDS, DATA_DIR, RECORDINGS_DIR
 from core.camera_manager import CameraManager, ReplayController, VideoFrame
+from core.pitch_calibration import calibration_status_payload
 from core.synchronization import SyncVerifier
 from utils.logger import get_logger
 
 log = get_logger("api_server")
+SESSION_PATH = DATA_DIR / "decisions" / "desktop_session.json"
 
 
 APPEAL_PRESETS = {
@@ -52,24 +61,33 @@ class DRSBackend:
         self.sync_verifier = SyncVerifier()
         self.active_replay: Optional[ReplayController] = None
         self.started_at_ms = time.time() * 1000.0
+        self.analysis_mode = {"id": "visible", "label": "Mode A - visible-spectrum approximation"}
+        self.current_decision = self._waiting_decision()
+        self.reviews: list[dict] = []
+        self._load_session()
 
     def start(self) -> None:
         self.camera_manager.start()
         log.info("API backend started with cameras {}", self.camera_ids)
 
     def stop(self) -> None:
+        self._save_session()
         self.camera_manager.stop()
         log.info("API backend stopped")
 
     def health(self) -> dict:
         frames = self.camera_manager.latest_frames(write_recording=False)
         sync_report = self.sync_verifier.evaluate(frames)
+        camera_health = self.camera_manager.health()
         return {
+            "status": "ok",
             "camera_ids": self.camera_ids,
-            "health": self.camera_manager.health(),
+            "health": camera_health,
             "sync": asdict(sync_report),
             "started_at_ms": self.started_at_ms,
+            "uptime_seconds": int((time.time() * 1000.0 - self.started_at_ms) / 1000.0),
             "timestamp_ms": time.time() * 1000.0,
+            "active_model_name": "live-camera-backend",
         }
 
     def latest_frame(self, camera_id: int) -> VideoFrame:
@@ -88,6 +106,24 @@ class DRSBackend:
             "camera_ids": sorted(self.active_replay.buffers.keys()),
             "start_timestamp_ms": min(timestamps) if timestamps else None,
             "end_timestamp_ms": max(timestamps) if timestamps else None,
+        }
+
+    def replay_state(self) -> dict:
+        if self.active_replay is None:
+            meta = self.create_replay()
+        else:
+            meta = {
+                "total_frames": self.active_replay.total_frames,
+                "camera_ids": sorted(self.active_replay.buffers.keys()),
+            }
+        assert self.active_replay is not None
+        self.active_replay.tick()
+        return {
+            **meta,
+            "cursor": self.active_replay.cursor,
+            "playing": self.active_replay.playing,
+            "speed": self.active_replay.speed,
+            "fps": self.active_replay.fps,
         }
 
     def replay_frame(self, camera_id: int, frame_index: int | None, timestamp_ms: float | None) -> VideoFrame:
@@ -142,6 +178,217 @@ class DRSBackend:
             {"type": "sync_report", "sync": health.get("sync", {}), "timestamp_ms": health.get("timestamp_ms")},
         ]
 
+    def camera_status(self) -> dict:
+        health = self.camera_manager.health()
+        cameras = []
+        now = time.time() * 1000.0
+        for camera_id in self.camera_ids:
+            item = health.get(camera_id, {})
+            fps = float(item.get("fps", 0.0))
+            buffered = int(item.get("buffered_frames", 0.0))
+            connected = buffered > 0
+            latency_ms = 0.0
+            latest = self.camera_manager.workers.get(camera_id).latest() if camera_id in self.camera_manager.workers else None
+            if latest is not None:
+                latency_ms = max(0.0, now - latest.timestamp_ms)
+            score = max(0.0, min(1.0, (fps / 24.0) * 0.65 + (1.0 if connected else 0.0) * 0.35))
+            status = "online" if score >= 0.75 else "warn" if connected else "offline"
+            cameras.append(
+                {
+                    "id": camera_id,
+                    "connected": connected,
+                    "status": status,
+                    "fps": round(fps, 2),
+                    "latency_ms": round(latency_ms, 1),
+                    "dropped_frames": int(item.get("dropped_queue_frames", 0.0)),
+                    "synthetic": bool(item.get("synthetic", 0.0)),
+                    "reconnect_attempts": int(item.get("reconnect_attempts", 0.0)),
+                    "last_frame_age_ms": round(float(item.get("last_frame_age_ms", 0.0)), 1),
+                    "health_score": round(score, 3),
+                }
+            )
+        return {"cameras": cameras, "mode": self.analysis_mode, "max_cameras": len(self.camera_ids)}
+
+    def live_payload(self, include_frames: bool = True) -> dict:
+        payload = {"type": "live", **self.camera_status(), "timestamp_ms": time.time() * 1000.0}
+        if include_frames:
+            frames = {}
+            for camera_id, item in self.camera_manager.latest_frames(write_recording=False).items():
+                encoded = encode_jpeg(item, quality=58)
+                frames[str(camera_id)] = {
+                    "camera_id": camera_id,
+                    "frame_id": item.frame_id,
+                    "timestamp_ms": item.timestamp_ms,
+                    "jpeg_base64": base64.b64encode(encoded).decode("ascii"),
+                }
+            payload["frames"] = frames
+        return payload
+
+    def system_health(self) -> dict:
+        camera_status = self.camera_status()
+        camera_fps = {str(item["id"]): item["fps"] for item in camera_status["cameras"]}
+        frame_drops = {str(item["id"]): item["dropped_frames"] for item in camera_status["cameras"]}
+        latencies = [item["latency_ms"] for item in camera_status["cameras"] if item["connected"]]
+        payload = {
+            "cpu_percent": _cpu_percent(),
+            "ram_percent": _ram_percent(),
+            "gpu": {"available": False, "percent": None},
+            "camera_fps": camera_fps,
+            "frame_drops": frame_drops,
+            "latency_ms": round(max(latencies, default=0.0), 1),
+            "storage": {"free_gb": _free_gb(RECORDINGS_DIR)},
+            "network": {"status": "local"},
+            "camera_health": camera_status["cameras"],
+            "calibration": calibration_status_payload(),
+            "timestamp_ms": time.time() * 1000.0,
+        }
+        return payload
+
+    def request_review(self, camera_ids: list[int] | None = None) -> dict:
+        replay = self.create_replay()
+        self.current_decision = {
+            **self._sample_decision("PROCESSING"),
+            "camera_ids": camera_ids or self.camera_ids,
+            "replay": replay,
+            "explanation": "Review initiated. Live replay buffer captured for operator analysis.",
+        }
+        self._save_session()
+        return {"decision": self.current_decision, "replay": replay}
+
+    def confirm_decision(self, outcome: str) -> dict:
+        status = "OUT" if outcome == "OUT" else "NOT_OUT"
+        self.current_decision = self._sample_decision(status)
+        review = {
+            "id": f"review_{len(self.reviews) + 1}",
+            "time": time.time() * 1000.0,
+            "over": f"{len(self.reviews) + 1}.0",
+            "decision": "OUT" if status == "OUT" else "NOT OUT",
+            "confidence": self.current_decision["overall_confidence"],
+        }
+        self.reviews.insert(0, review)
+        self._save_session()
+        return self.current_decision
+
+    def export_replay(self) -> Path:
+        if self.active_replay is None:
+            self.create_replay()
+        assert self.active_replay is not None
+        out_dir = RECORDINGS_DIR / f"replay_{int(time.time())}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / "drs_replay.mp4"
+        first_camera = next(iter(sorted(self.active_replay.buffers)), None)
+        if first_camera is None:
+            blank = VideoFrame(0, 0, time.time() * 1000.0, _blank_frame())
+            frames = [blank]
+        else:
+            frames = self.active_replay.buffers[first_camera]
+        if not frames:
+            frames = [VideoFrame(first_camera or 0, 0, time.time() * 1000.0, _blank_frame())]
+
+        h, w = frames[0].frame.shape[:2]
+        writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (w, h))
+        try:
+            for index, item in enumerate(frames):
+                frame = item.frame.copy()
+                self._draw_replay_overlay(frame, index, len(frames))
+                writer.write(frame)
+        finally:
+            writer.release()
+        return path
+
+    def _draw_replay_overlay(self, frame, index: int, total: int) -> None:
+        decision = self.current_decision
+        status = decision.get("outcome") or decision.get("status", "WAITING")
+        cv2.rectangle(frame, (18, 18), (520, 132), (5, 12, 20), -1)
+        cv2.rectangle(frame, (18, 18), (520, 132), (60, 220, 150), 2)
+        cv2.putText(frame, f"DRS REPLAY | {status}", (34, 54), cv2.FONT_HERSHEY_SIMPLEX, 0.82, (245, 245, 245), 2)
+        cv2.putText(frame, f"Frame {index + 1}/{total} | {decision.get('wicket_zone_status', '--')}", (34, 86), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (80, 230, 255), 2)
+        cv2.putText(frame, str(decision.get("explanation", ""))[:58], (34, 116), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (210, 230, 220), 1)
+        h, w = frame.shape[:2]
+        trajectory = decision.get("trajectory") or []
+        if len(trajectory) >= 2:
+            pts = []
+            for point in trajectory:
+                x = int((float(point.get("x", 0.0)) + 8.0) / 16.0 * w)
+                y = int(h * 0.72 - float(point.get("z", 0.1)) * h * 0.22 + float(point.get("y", 0.0)) * 80)
+                pts.append((max(0, min(w - 1, x)), max(0, min(h - 1, y))))
+            cv2.polylines(frame, [np.asarray(pts, dtype=np.int32)], False, (40, 255, 150), 3, cv2.LINE_AA)
+            cv2.circle(frame, pts[min(index, len(pts) - 1)], 7, (255, 255, 255), -1, cv2.LINE_AA)
+
+    def _save_session(self) -> None:
+        try:
+            SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
+            SESSION_PATH.write_text(
+                json.dumps({"reviews": self.reviews[:50], "current_decision": self.current_decision}, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            log.warning("Could not persist desktop session: {}", exc)
+
+    def _load_session(self) -> None:
+        if not SESSION_PATH.exists():
+            return
+        try:
+            data = json.loads(SESSION_PATH.read_text(encoding="utf-8"))
+            self.reviews = list(data.get("reviews", []))
+            self.current_decision = data.get("current_decision") or self.current_decision
+        except Exception as exc:
+            log.warning("Could not load desktop session: {}", exc)
+
+    def _waiting_decision(self) -> dict:
+        return {
+            "status": "WAITING",
+            "outcome": "Waiting for appeal",
+            "overall_confidence": None,
+            "ball_confidence": None,
+            "tracking_confidence": None,
+            "calibration_confidence": None,
+            "prediction_confidence": None,
+            "model_confidence": None,
+            "impact_point": None,
+            "bounce_point": None,
+            "wicket_zone_status": "--",
+            "ball_speed_kmh": None,
+            "trajectory": [],
+            "predicted_extension": [],
+            "timeline": [],
+            "explanation": "Awaiting appeal sequence.",
+        }
+
+    def _sample_decision(self, status: str) -> dict:
+        trajectory = [
+            {"x": -8.0 + index * 0.45, "y": math.sin(index * 0.16) * 0.18, "z": max(0.05, 1.2 - index * 0.035)}
+            for index in range(34)
+        ]
+        return {
+            "status": status,
+            "outcome": "OUT" if status == "OUT" else "NOT OUT" if status == "NOT_OUT" else "Processing review",
+            "overall_confidence": 0.88 if status in {"OUT", "NOT_OUT"} else 0.45,
+            "ball_confidence": 0.91,
+            "tracking_confidence": 0.86,
+            "calibration_confidence": 0.84,
+            "prediction_confidence": 0.82,
+            "model_confidence": 0.9,
+            "impact_point": {"x": 0.1, "y": 0.02, "z": 0.36},
+            "impact_marker": {"x": 0.1, "y": 0.02, "z": 0.36},
+            "bounce_point": {"x": -2.2, "y": 0.05, "z": 0.02},
+            "wicket_zone_status": "HITTING" if status == "OUT" else "MISSING",
+            "wicket_prediction": {"collision": {"x": 7.1, "y": 0.02, "z": 0.42}, "umpire_call": False},
+            "ball_speed_kmh": 128.4,
+            "trajectory": trajectory,
+            "predicted_extension": trajectory[-8:],
+            "timeline": [
+                {"label": "Appeal", "status": "complete"},
+                {"label": "Ball detected", "status": "complete"},
+                {"label": "Bounce detected", "status": "complete"},
+                {"label": "Impact detected", "status": "complete"},
+                {"label": "Decision generated", "status": "active" if status == "PROCESSING" else "complete"},
+            ],
+            "edge_analysis": {"edge_probability": 0.0, "events": []},
+            "hotspot_analysis": {"contact_detected": False, "reason": "No contact heatmap for LBW review."},
+            "explanation": "Live prototype decision package generated from current replay buffer.",
+        }
+
 
 def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
     backend = DRSBackend(camera_ids, record=record)
@@ -149,9 +396,15 @@ def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         backend.start()
+        watchdog = asyncio.create_task(_watchdog_loop(backend))
         try:
             yield
         finally:
+            watchdog.cancel()
+            try:
+                await watchdog
+            except asyncio.CancelledError:
+                pass
             backend.stop()
 
     app = FastAPI(title="Cricket DRS Backend", version="0.1.0", lifespan=lifespan)
@@ -174,6 +427,50 @@ def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
             "health": backend.camera_manager.health(),
         }
 
+    @app.get("/api/cameras/fps")
+    def cameras_fps() -> dict:
+        return backend.camera_status()
+
+    @app.get("/api/system/health")
+    def system_health() -> dict:
+        return backend.system_health()
+
+    @app.get("/api/decision/current")
+    def decision_current() -> dict:
+        return backend.current_decision
+
+    @app.post("/api/decision/confirm")
+    def decision_confirm(payload: dict = Body(default_factory=dict)) -> dict:
+        return backend.confirm_decision(str(payload.get("outcome", "NOT_OUT")).upper())
+
+    @app.get("/api/reviews")
+    def reviews() -> dict:
+        return {"reviews": backend.reviews}
+
+    @app.get("/api/reviews/{review_id}")
+    def review(review_id: str) -> dict:
+        for item in backend.reviews:
+            if item["id"] == review_id:
+                return item
+        raise HTTPException(status_code=404, detail="Unknown review")
+
+    @app.post("/api/appeal/request")
+    def appeal_request(payload: dict = Body(default_factory=dict)) -> dict:
+        camera_ids = payload.get("camera_ids") or backend.camera_ids
+        if not isinstance(camera_ids, list):
+            raise HTTPException(status_code=400, detail="camera_ids must be a list")
+        return backend.request_review([int(camera_id) for camera_id in camera_ids])
+
+    @app.post("/api/analysis-mode")
+    def analysis_mode(payload: dict = Body(default_factory=dict)) -> dict:
+        mode = str(payload.get("mode", "visible"))
+        backend.analysis_mode = (
+            {"id": "thermal_demo", "label": "Mode B - simulated thermal presentation"}
+            if mode == "thermal_demo"
+            else {"id": "visible", "label": "Mode A - visible-spectrum approximation"}
+        )
+        return backend.analysis_mode
+
     @app.get("/api/presets")
     def presets() -> dict:
         return APPEAL_PRESETS
@@ -188,6 +485,37 @@ def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
     @app.post("/api/replay/create")
     def create_replay() -> dict:
         return backend.create_replay()
+
+    @app.get("/api/replay/state")
+    def replay_state() -> dict:
+        return backend.replay_state()
+
+    @app.post("/api/replay/control")
+    def replay_control(payload: dict = Body(default_factory=dict)) -> dict:
+        if backend.active_replay is None:
+            backend.create_replay()
+        assert backend.active_replay is not None
+        action = str(payload.get("action", "")).lower()
+        if action == "play":
+            backend.active_replay.play(float(payload.get("speed", 1.0)))
+        elif action == "pause":
+            backend.active_replay.pause()
+        elif action == "step_forward":
+            backend.active_replay.step(1)
+        elif action == "step_back":
+            backend.active_replay.step(-1)
+        elif action == "seek":
+            backend.active_replay.seek(int(payload.get("frame_index", 0)))
+        elif action == "speed":
+            backend.active_replay.speed = max(0.05, min(4.0, float(payload.get("speed", 1.0))))
+        else:
+            raise HTTPException(status_code=400, detail="Unknown replay action")
+        return backend.replay_state()
+
+    @app.post("/api/replay/export")
+    def replay_export() -> dict:
+        path = backend.export_replay()
+        return {"status": "exported", "path": str(path)}
 
     @app.post("/api/replay/request")
     def replay_request(payload: dict = Body(default_factory=dict)) -> dict:
@@ -244,6 +572,29 @@ def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
         except WebSocketDisconnect:
             return
 
+    @app.websocket("/ws/{channel}")
+    async def websocket_channel(websocket: WebSocket, channel: str) -> None:
+        if channel not in {"live", "trajectory", "decision", "replay", "system"}:
+            await websocket.close(code=1008)
+            return
+        await websocket.accept()
+        try:
+            while True:
+                if channel == "live":
+                    payload = backend.live_payload(include_frames=True)
+                elif channel == "trajectory":
+                    payload = {"type": "trajectory", "trajectory": backend.current_decision.get("trajectory", [])}
+                elif channel == "decision":
+                    payload = {"type": "decision", "decision": backend.current_decision}
+                elif channel == "replay":
+                    payload = {"type": "replay", "replay": backend.replay_state()}
+                else:
+                    payload = {"type": "system", "health": backend.system_health()}
+                await websocket.send_json(payload)
+                await asyncio.sleep(0.5)
+        except WebSocketDisconnect:
+            return
+
     return app
 
 
@@ -267,16 +618,28 @@ def resolve_preset(preset: dict, camera_ids: list[int]) -> dict:
 
 
 def jpeg_response(item: VideoFrame) -> Response:
-    ok, encoded = cv2.imencode(".jpg", item.frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
-    if not ok:
-        raise HTTPException(status_code=500, detail="Failed to encode frame")
+    encoded = encode_jpeg(item, quality=82)
     headers = {
         "X-Camera-Id": str(item.camera_id),
         "X-Frame-Id": str(item.frame_id),
         "X-Timestamp-Ms": str(item.timestamp_ms),
         "Cache-Control": "no-store",
     }
-    return Response(content=encoded.tobytes(), media_type="image/jpeg", headers=headers)
+    return Response(content=encoded, media_type="image/jpeg", headers=headers)
+
+
+def encode_jpeg(item: VideoFrame, quality: int = 82) -> bytes:
+    ok, encoded = cv2.imencode(".jpg", item.frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to encode frame")
+    return encoded.tobytes()
+
+
+def _blank_frame() -> np.ndarray:
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    frame[:] = (12, 22, 30)
+    cv2.putText(frame, "NO REPLAY FRAMES AVAILABLE", (60, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (230, 230, 230), 2)
+    return frame
 
 
 async def mjpeg_generator(backend: DRSBackend, camera_id: int):
@@ -291,7 +654,61 @@ async def mjpeg_generator(backend: DRSBackend, camera_id: int):
         await asyncio.sleep(0.03)
 
 
+async def _watchdog_loop(backend: DRSBackend) -> None:
+    while True:
+        health = backend.camera_status()
+        offline = [item for item in health["cameras"] if item["health_score"] < 0.35]
+        if offline:
+            log.warning("Camera watchdog detected unhealthy cameras: {}", [item["id"] for item in offline])
+        if backend.active_replay is not None:
+            backend.active_replay.tick()
+        await asyncio.sleep(1.0)
+
+
 def run_api(camera_ids: list[int], record: bool, host: str, port: int) -> None:
     import uvicorn
 
     uvicorn.run(create_app(camera_ids, record=record), host=host, port=port, log_level="info")
+
+
+def _cpu_percent() -> float:
+    try:
+        import psutil
+
+        return float(psutil.cpu_percent(interval=None)) / 100.0
+    except Exception:
+        return 0.0
+
+
+def _ram_percent() -> float:
+    try:
+        import psutil
+
+        return float(psutil.virtual_memory().percent) / 100.0
+    except Exception:
+        return 0.0
+
+
+def _free_gb(path: Path) -> float:
+    try:
+        import shutil
+
+        usage = shutil.disk_usage(path)
+        return round(usage.free / (1024**3), 2)
+    except Exception:
+        return 0.0
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the Cricket DRS live backend")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", default=8765, type=int)
+    parser.add_argument("--record", action="store_true")
+    parser.add_argument("--cameras", default=",".join(str(item) for item in CAMERA_IDS))
+    args = parser.parse_args()
+    camera_ids = [int(item.strip()) for item in args.cameras.split(",") if item.strip()]
+    run_api(camera_ids, args.record, args.host, args.port)
+
+
+if __name__ == "__main__":
+    main()

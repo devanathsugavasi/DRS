@@ -8,9 +8,9 @@ const ENGINE_PORT = 8765;
 const TESTING_PLATFORM_PORT = 5173;
 const ENGINE_URL = `http://localhost:${ENGINE_PORT}`;
 const TESTING_PLATFORM_URL = `http://127.0.0.1:${TESTING_PLATFORM_PORT}`;
-const REPO_ROOT = path.resolve(__dirname, "..", "..");
-const PYTHON_EXE = path.join(REPO_ROOT, ".venv", "Scripts", "python.exe");
-const TESTING_PLATFORM_ROOT = path.join(REPO_ROOT, "dashboard", "testing-platform");
+const DEV_REPO_ROOT = path.resolve(__dirname, "..", "..");
+const BACKEND_ROOT = app.isPackaged ? path.join(process.resourcesPath, "backend") : DEV_REPO_ROOT;
+const TESTING_PLATFORM_ROOT = path.join(DEV_REPO_ROOT, "dashboard", "testing-platform");
 const LOG_PREFIX = "[DRS Electron]";
 
 let engineProcess = null;
@@ -86,10 +86,30 @@ function spawnOptions(cwd) {
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   };
-  if (process.platform === "win32") {
-    options.shell = true;
-  }
   return options;
+}
+
+function pythonCandidates() {
+  const candidates = [];
+  if (process.env.DRS_PYTHON) candidates.push(process.env.DRS_PYTHON);
+  if (process.platform === "win32") {
+    candidates.push(path.join(DEV_REPO_ROOT, ".venv", "Scripts", "python.exe"));
+    candidates.push("py");
+    candidates.push("python");
+  } else {
+    candidates.push(path.join(DEV_REPO_ROOT, ".venv", "bin", "python"));
+    candidates.push("python3");
+    candidates.push("python");
+  }
+  return candidates;
+}
+
+function resolvePython() {
+  for (const candidate of pythonCandidates()) {
+    if (path.isAbsolute(candidate) && fs.existsSync(candidate)) return candidate;
+    if (!path.isAbsolute(candidate)) return candidate;
+  }
+  return null;
 }
 
 function healthCheckAsync() {
@@ -107,29 +127,24 @@ async function startEngine() {
     return true;
   }
 
-  if (!fs.existsSync(PYTHON_EXE)) {
-    const message = `Python venv not found at ${PYTHON_EXE}`;
+  const pythonExe = resolvePython();
+  if (!pythonExe) {
+    const message = "Python executable not found. Set DRS_PYTHON or create .venv.";
     startupState.engine = { status: "failed", message };
     logError(message);
     return false;
   }
 
   try {
-    const command = process.platform === "win32"
-      ? `"${PYTHON_EXE}" -m uvicorn core.testing_api:app --host 127.0.0.1 --port ${ENGINE_PORT}`
-      : null;
-
-    engineProcess = command
-      ? spawn(command, [], spawnOptions(REPO_ROOT))
-      : spawn(
-          PYTHON_EXE,
-          ["-m", "uvicorn", "core.testing_api:app", "--host", "127.0.0.1", "--port", String(ENGINE_PORT)],
-          { ...spawnOptions(REPO_ROOT), shell: false }
-        );
+    engineProcess = spawn(
+      pythonExe,
+      ["-m", "core.api_server", "--host", "127.0.0.1", "--port", String(ENGINE_PORT)],
+      spawnOptions(BACKEND_ROOT)
+    );
 
     attachProcessLogging("engine", engineProcess);
     startupState.engine = { status: "started", message: "Backend process launched" };
-    log("Engine spawn ok", { python: PYTHON_EXE, cwd: REPO_ROOT });
+    log("Engine spawn ok", { python: pythonExe, module: "core.api_server", cwd: BACKEND_ROOT });
     return true;
   } catch (error) {
     startupState.engine = { status: "failed", message: error.message };

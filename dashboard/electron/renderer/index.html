@@ -98,9 +98,17 @@
 
       <footer class="bottom-deck">
         <section class="replay-strip">
+          <button id="replay-play" type="button">Play</button>
+          <button id="replay-pause" type="button">Pause</button>
           <button id="replay-back" type="button">Prev</button>
           <input id="frame-timeline" type="range" min="0" max="100" value="0" />
           <button id="replay-forward" type="button">Next</button>
+          <select id="replay-speed" aria-label="Replay speed">
+            <option value="0.25">0.25x</option>
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+          </select>
+          <button id="replay-export" type="button">Export MP4</button>
           <span id="frame-label">Frame 0</span>
         </section>
 

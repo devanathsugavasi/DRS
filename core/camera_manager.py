@@ -53,6 +53,9 @@ class CameraWorker(threading.Thread):
         self.fps_actual = 0.0
         self.dropped_queue_frames = 0
         self.synthetic = False
+        self.reconnect_attempts = 0
+        self.last_frame_at = 0.0
+        self.last_error = ""
         self._stop_event = threading.Event()
         self._frame_id = 0
         self._capture: Optional[cv2.VideoCapture] = None
@@ -67,34 +70,56 @@ class CameraWorker(threading.Thread):
         return list(self.buffer)
 
     def run(self) -> None:
+        started = time.perf_counter()
+        while not self._stop_event.is_set():
+            if not self._open_capture():
+                if not self.synthetic_on_fail:
+                    log.error("Camera {} is unavailable", self.camera_id)
+                    return
+                log.warning("Camera {} unavailable; using synthetic feed while retrying", self.camera_id)
+                self.synthetic = True
+                self._run_synthetic_until_retry(started)
+                continue
+
+            self.synthetic = False
+            while not self._stop_event.is_set() and self._capture is not None:
+                ok, frame = self._capture.read()
+                if not ok:
+                    self.last_error = "read_failed"
+                    log.warning("Camera {} read failed; reconnecting", self.camera_id)
+                    self._release_capture()
+                    break
+                self._ingest(frame, started, self._capture.get(cv2.CAP_PROP_POS_MSEC))
+
+        self._release_capture()
+
+    def _open_capture(self) -> bool:
+        self.reconnect_attempts += 1
+        self._release_capture()
         self._capture = cv2.VideoCapture(self.camera_id, cv2.CAP_ANY)
         if not self._capture.isOpened():
-            if not self.synthetic_on_fail:
-                log.error("Camera {} is unavailable", self.camera_id)
-                return
-            log.warning("Camera {} unavailable; using synthetic feed", self.camera_id)
-            self.synthetic = True
-            self._run_synthetic()
-            return
-
+            self.last_error = "open_failed"
+            self._release_capture()
+            return False
         self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
         self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
         self._capture.set(cv2.CAP_PROP_FPS, TARGET_FPS)
         self._capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.last_error = ""
+        return True
 
-        started = time.perf_counter()
-        while not self._stop_event.is_set():
-            ok, frame = self._capture.read()
-            if not ok:
-                time.sleep(0.003)
-                continue
-            self._ingest(frame, started, self._capture.get(cv2.CAP_PROP_POS_MSEC))
-
-        self._capture.release()
+    def _release_capture(self) -> None:
+        if self._capture is not None:
+            self._capture.release()
+            self._capture = None
 
     def _run_synthetic(self) -> None:
         started = time.perf_counter()
+        self._run_synthetic_until_retry(started, retry_camera=False)
+
+    def _run_synthetic_until_retry(self, started: float, retry_camera: bool = True) -> None:
         interval = 1.0 / TARGET_FPS
+        next_retry = time.perf_counter() + 2.0
         color = [(42, 92, 180), (42, 150, 80), (170, 72, 72)][self.camera_id % 3]
         while not self._stop_event.is_set():
             t = time.perf_counter() - started
@@ -104,6 +129,8 @@ class CameraWorker(threading.Thread):
             cv2.circle(frame, (x, y), 13, (245, 245, 245), -1, cv2.LINE_AA)
             cv2.putText(frame, f"SYNTHETIC CAM {self.camera_id}", (24, 86), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 255, 255), 2)
             self._ingest(frame, started, t * 1000.0)
+            if retry_camera and time.perf_counter() >= next_retry:
+                return
             time.sleep(interval)
 
     def _ingest(self, frame: np.ndarray, started: float, cv2_timestamp: float) -> None:
@@ -112,6 +139,7 @@ class CameraWorker(threading.Thread):
         stamped = draw_timestamp(frame, timestamp_ms, self.camera_id)
         item = VideoFrame(self.camera_id, self._frame_id, timestamp_ms, stamped, captured_at, cv2_timestamp)
         self._frame_id += 1
+        self.last_frame_at = timestamp_ms
         self.buffer.append(item)
         elapsed = max(0.001, time.perf_counter() - started)
         self.fps_actual = self._frame_id / elapsed
@@ -172,24 +200,29 @@ class ReplayController:
         self.speed = 1.0
         self.playing = False
         self.total_frames = max((len(buffer) for buffer in buffers.values()), default=0)
+        self.updated_at = time.perf_counter()
         self._lock = threading.Lock()
 
     def play(self, speed: float = 1.0) -> None:
         with self._lock:
             self.speed = max(0.05, min(4.0, speed))
             self.playing = True
+            self.updated_at = time.perf_counter()
 
     def pause(self) -> None:
         with self._lock:
             self.playing = False
+            self.updated_at = time.perf_counter()
 
     def step(self, delta: int) -> None:
         with self._lock:
             self.cursor = max(0, min(self.total_frames - 1, self.cursor + delta))
+            self.updated_at = time.perf_counter()
 
     def seek(self, frame_index: int) -> None:
         with self._lock:
             self.cursor = max(0, min(self.total_frames - 1, frame_index))
+            self.updated_at = time.perf_counter()
 
     def current_frames(self) -> dict[int, VideoFrame]:
         with self._lock:
@@ -198,11 +231,18 @@ class ReplayController:
 
     def tick(self) -> None:
         with self._lock:
-            if self.playing:
-                self.cursor += 1
-                if self.cursor >= self.total_frames:
-                    self.cursor = max(0, self.total_frames - 1)
-                    self.playing = False
+            if not self.playing or self.total_frames <= 0:
+                return
+            now = time.perf_counter()
+            elapsed = now - self.updated_at
+            advance = int(elapsed * self.fps * self.speed)
+            if advance <= 0:
+                return
+            self.updated_at = now
+            self.cursor += advance
+            if self.cursor >= self.total_frames:
+                self.cursor = max(0, self.total_frames - 1)
+                self.playing = False
 
     def frame_delay_ms(self) -> int:
         return max(1, int((1000.0 / self.fps) / self.speed))
@@ -223,6 +263,8 @@ class CameraManager:
     def start(self) -> None:
         buffer_frames = int(BUFFER_SECONDS * TARGET_FPS)
         for camera_id in self.camera_ids:
+            if camera_id in self.workers and self.workers[camera_id].is_alive():
+                continue
             worker = CameraWorker(camera_id, buffer_frames)
             self.workers[camera_id] = worker
             worker.start()
@@ -237,6 +279,7 @@ class CameraManager:
             worker.join(timeout=2.0)
         if self.writer:
             self.writer.release()
+            self.writer = None
 
     def latest_frames(self, write_recording: bool = True) -> dict[int, VideoFrame]:
         frames = {camera_id: worker.latest() for camera_id, worker in self.workers.items()}
@@ -275,12 +318,16 @@ class CameraManager:
         return out_dir
 
     def health(self) -> dict[int, dict[str, float]]:
+        now_ms = time.time() * 1000.0
         return {
             camera_id: {
                 "fps": worker.fps_actual,
                 "buffered_frames": float(len(worker.buffer)),
                 "dropped_queue_frames": float(worker.dropped_queue_frames),
                 "synthetic": float(worker.synthetic),
+                "reconnect_attempts": float(worker.reconnect_attempts),
+                "last_frame_age_ms": max(0.0, now_ms - worker.last_frame_at) if worker.last_frame_at else 999999.0,
+                "alive": float(worker.is_alive()),
             }
             for camera_id, worker in self.workers.items()
         }
