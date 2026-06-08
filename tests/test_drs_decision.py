@@ -82,3 +82,30 @@ def test_decision_inconclusive_without_calibration(tmp_path: Path, monkeypatch: 
     sync = ReadinessGate().sync({"sync_error_ms": 2.0}, 30.0)
     decision = service.build_decision(_sample_tracks(), camera_results, False, calibration, sync, ReadinessGate(), {})
     assert decision["raw_lbw_recommendation"] == "REVIEW INCONCLUSIVE"
+
+
+def test_explicit_bounce_pixel_is_mapped_through_calibration(calibrated_env: None) -> None:
+    service = DRSDecisionService()
+    mapped = service.calibrated_pixel_point([180, 360], 1)
+    assert mapped is not None
+    assert abs(mapped["lateral_mm"]) < 1.0
+    assert abs(mapped["along_mm"]) < 1.0
+
+
+def test_stump_projection_targets_calibrated_wicket_plane() -> None:
+    service = DRSDecisionService()
+    pitch_path = []
+    for idx in range(8):
+        pitch_path.append(
+            {
+                "lateral_mm": 0.0,
+                "along_mm": -900.0 + (idx * 100.0),
+                "timestamp_ms": idx * 20.0,
+                "confidence": 0.9,
+                "frame_id": idx,
+            }
+        )
+
+    probability, extension = service.stump_hit_probability(pitch_path, {"lateral_mm": 0.0, "along_mm": -450.0})
+    assert probability >= 0.72
+    assert extension

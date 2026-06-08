@@ -109,7 +109,30 @@ class TrajectoryPredictor:
     ) -> TrajectoryPoint | None:
         if wicket_x_m is None:
             return None
-        for point in points:
-            if abs(point.x - wicket_x_m) < 0.03 and abs(point.y) <= stump_half_width_m and 0 <= point.z <= stump_height_m:
-                return point
+        for previous, current in zip(points, points[1:]):
+            prev_delta = previous.x - wicket_x_m
+            curr_delta = current.x - wicket_x_m
+            crossed_plane = prev_delta == 0.0 or curr_delta == 0.0 or (prev_delta < 0 < curr_delta) or (curr_delta < 0 < prev_delta)
+            if not crossed_plane:
+                continue
+
+            span = current.x - previous.x
+            ratio = 0.0 if abs(span) < 1e-9 else (wicket_x_m - previous.x) / span
+            ratio = max(0.0, min(1.0, ratio))
+            y = previous.y + ((current.y - previous.y) * ratio)
+            z = previous.z + ((current.z - previous.z) * ratio)
+            if abs(y) <= stump_half_width_m and 0.0 <= z <= stump_height_m:
+                return TrajectoryPoint(
+                    t=previous.t + ((current.t - previous.t) * ratio),
+                    x=wicket_x_m,
+                    y=y,
+                    z=z,
+                    vx=previous.vx + ((current.vx - previous.vx) * ratio),
+                    vy=previous.vy + ((current.vy - previous.vy) * ratio),
+                    vz=previous.vz + ((current.vz - previous.vz) * ratio),
+                )
+
+        nearest = min(points, key=lambda point: abs(point.x - wicket_x_m), default=None)
+        if nearest and abs(nearest.x - wicket_x_m) <= 0.03 and abs(nearest.y) <= stump_half_width_m and 0.0 <= nearest.z <= stump_height_m:
+            return nearest
         return None

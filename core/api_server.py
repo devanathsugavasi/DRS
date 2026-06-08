@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import Optional
 
@@ -143,7 +145,16 @@ class DRSBackend:
 
 def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
     backend = DRSBackend(camera_ids, record=record)
-    app = FastAPI(title="Cricket DRS Backend", version="0.1.0")
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        backend.start()
+        try:
+            yield
+        finally:
+            backend.stop()
+
+    app = FastAPI(title="Cricket DRS Backend", version="0.1.0", lifespan=lifespan)
     app.state.backend = backend
     app.add_middleware(
         CORSMiddleware,
@@ -151,14 +162,6 @@ def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    @app.on_event("startup")
-    def _startup() -> None:
-        backend.start()
-
-    @app.on_event("shutdown")
-    def _shutdown() -> None:
-        backend.stop()
 
     @app.get("/api/health")
     def health() -> dict:

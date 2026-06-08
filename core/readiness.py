@@ -134,12 +134,16 @@ class ReadinessGate:
         if decision_confidence < self.thresholds.decision_confidence:
             failed.append("decision_confidence")
 
+        tracking_metrics: dict[str, Any] = {}
         if not tracking:
             failed.append("tracking")
         for idx, item in enumerate(tracking):
             score = _float_or_none(item.get("score")) or 0.0
             max_gap = int(item.get("max_missing_gap", item.get("missing_frames", 999)))
             reliability = item.get("reliability")
+            tracking_metrics[f"tracking_camera_{idx}_score"] = score
+            tracking_metrics[f"tracking_camera_{idx}_max_missing_gap"] = max_gap
+            tracking_metrics[f"tracking_camera_{idx}_reliability"] = reliability
             if score < self.thresholds.tracking_score or max_gap > self.thresholds.max_missing_gap or reliability not in {"medium", "high"}:
                 failed.append(f"tracking_camera_{idx}")
 
@@ -156,6 +160,8 @@ class ReadinessGate:
                 "homography_validation_error_cm": calibration.homography_error_cm,
                 "sync_error_ms": sync.sync_error_ms,
                 "replay_fps": sync.replay_fps,
+                "decision_confidence": round(decision_confidence, 3),
+                **tracking_metrics,
             },
         )
 

@@ -70,7 +70,14 @@ class LBWDecisionEngine:
             verdict = "UMPIRE_CALL"
         else:
             verdict = "NOT_OUT"
-        confidence = min(0.98, max(0.0, (stump_hit_probability * 0.75) + (tracking_quality * 0.25)))
+        if verdict == "OUT":
+            evidence_strength = stump_hit_probability
+        elif verdict == "NOT_OUT":
+            evidence_strength = 1.0 - stump_hit_probability
+        else:
+            margin_center = 0.50 + (self.umpire_call_margin / 2.0)
+            evidence_strength = 1.0 - min(1.0, abs(stump_hit_probability - margin_center) / max(0.01, self.umpire_call_margin))
+        confidence = min(0.98, max(0.0, (evidence_strength * 0.75) + (tracking_quality * 0.25)))
         return LBWDecision(verdict, confidence, pitched_in_line, impact_in_line, stump_hit_probability, zone, impact_height_mm, tracking_quality, self._explain(verdict))
 
     def _stump_zone(self, impact_y_mm: float, impact_height_mm: float) -> str:

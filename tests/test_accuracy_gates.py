@@ -15,10 +15,9 @@ REQUIRED_GATES = [
 ]
 
 
-def test_all_available_gates_reported():
+def test_all_available_gates_reported(synthetic_e2e_env):
+    del synthetic_e2e_env
     fixture = Path("tests/fixtures/scenarios/lbw_out_in_line.mp4")
-    if not fixture.exists():
-        pytest.skip("LBW scenario fixture not available")
     pipeline = DeliveryTestingPipeline()
     result = pipeline.process("gate_coverage", [fixture], AnalysisOptions(max_frames=90))
     failed = result["summary"]["gate"]["failed_gates"]
@@ -28,10 +27,9 @@ def test_all_available_gates_reported():
         assert any(item.startswith(gate) for item in reported), f"Gate '{gate}' missing from result"
 
 
-def test_inconclusive_when_tracking_lost():
+def test_inconclusive_when_tracking_lost(synthetic_e2e_env):
+    del synthetic_e2e_env
     fixture = Path("tests/fixtures/scenarios/lbw_inconclusive_tracking_lost.mp4")
-    if not fixture.exists():
-        pytest.skip("Tracking-lost scenario fixture not available")
     pipeline = DeliveryTestingPipeline()
     result = pipeline.process("tracking_lost", [fixture], AnalysisOptions(max_frames=90))
     assert result["summary"]["lbw_recommendation"] == "REVIEW INCONCLUSIVE"

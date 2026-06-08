@@ -15,6 +15,7 @@ from core.trajectory import TrajectoryPredictor
 STUMP_HALF_WIDTH_MM = (STUMP_WIDTH_M / 2.0) * 1000.0
 STUMP_HEIGHT_MM = 711.0
 DEFAULT_BALL_HEIGHT_M = 0.12
+WICKET_PLANE_ALONG_MM = 0.0
 
 
 class DRSDecisionService:
@@ -78,6 +79,18 @@ class DRSDecisionService:
         idx = max(0, min(idx, len(pitch_path) - 1))
         return pitch_path[idx]
 
+    def calibrated_pixel_point(
+        self,
+        point_px: list[int] | tuple[int, int] | None,
+        camera_id: int,
+    ) -> dict[str, float] | None:
+        if not point_px or len(point_px) != 2:
+            return None
+        mapped = self.pixel_to_pitch_mm(camera_id, float(point_px[0]), float(point_px[1]))
+        if mapped is None:
+            return None
+        return {"lateral_mm": mapped[0], "along_mm": mapped[1]}
+
     def estimate_impact(
         self,
         pitch_path: list[dict[str, float]],
@@ -85,13 +98,19 @@ class DRSDecisionService:
         impact_px: list[int] | None,
         camera_id: int,
     ) -> dict[str, float] | None:
-        if impact_px and len(impact_px) == 2:
-            mapped = self.pixel_to_pitch_mm(camera_id, float(impact_px[0]), float(impact_px[1]))
-            if mapped:
-                return {"lateral_mm": mapped[0], "along_mm": mapped[1]}
-        if bounce is None:
+        calibrated_impact = self.calibrated_pixel_point(impact_px, camera_id)
+        if calibrated_impact is not None:
+            return calibrated_impact
+        if bounce is None or not pitch_path:
             return None
-        bounce_idx = pitch_path.index(bounce)
+        try:
+            bounce_idx = pitch_path.index(bounce)
+        except ValueError:
+            bounce_idx = min(
+                range(len(pitch_path)),
+                key=lambda idx: abs(pitch_path[idx]["along_mm"] - bounce["along_mm"])
+                + abs(pitch_path[idx]["lateral_mm"] - bounce["lateral_mm"]),
+            )
         for item in pitch_path[bounce_idx:]:
             if item["along_mm"] > bounce["along_mm"] + 80:
                 return item
@@ -114,9 +133,9 @@ class DRSDecisionService:
             prediction = self.trajectory.predict_from_world_points(
                 positions_m,
                 times_s,
-                wicket_x_m=positions_m[-1][0] + 2.0,
+                wicket_x_m=WICKET_PLANE_ALONG_MM / 1000.0,
                 stump_half_width_m=STUMP_WIDTH_M / 2.0,
-                stump_height_m=STUMP_HEIGHT_M / 1000.0,
+                stump_height_m=STUMP_HEIGHT_M,
             )
         except ValueError:
             return 0.0, []
@@ -126,9 +145,52 @@ class DRSDecisionService:
         ]
         if prediction.wicket_collision:
             return 0.86, extension
-        if bounce and abs(bounce["lateral_mm"]) <= STUMP_HALF_WIDTH_MM:
-            return 0.64, extension
-        return 0.28, extension
+
+        nearest = min(
+            prediction.points,
+            key=lambda point: abs(point.x - (WICKET_PLANE_ALONG_MM / 1000.0)),
+            default=None,
+        )
+        if nearest is None:
+            return 0.0, extension
+
+        lateral_excess_m = max(0.0, abs(nearest.y) - (STUMP_WIDTH_M / 2.0))
+        height_excess_m = max(0.0, nearest.z - STUMP_HEIGHT_M)
+        lateral_score = max(0.0, 1.0 - (lateral_excess_m / (STUMP_WIDTH_M / 2.0)))
+        height_score = max(0.0, 1.0 - (height_excess_m / STUMP_HEIGHT_M))
+        bounce_score = 0.12 if bounce and abs(bounce["lateral_mm"]) <= STUMP_HALF_WIDTH_MM else 0.0
+        probability = (0.55 * lateral_score) + (0.25 * height_score) + bounce_score
+        return round(min(0.69, probability), 3), extension
+
+    def estimate_impact_height_mm(
+        self,
+        pitch_path: list[dict[str, float]],
+        impact: dict[str, float] | None,
+    ) -> float | None:
+        if impact is None or len(pitch_path) < 3:
+            return None
+        positions_m = []
+        times_s = []
+        t0 = pitch_path[0]["timestamp_ms"] / 1000.0
+        for item in pitch_path[-24:]:
+            positions_m.append((item["along_mm"] / 1000.0, item["lateral_mm"] / 1000.0, DEFAULT_BALL_HEIGHT_M))
+            times_s.append((item["timestamp_ms"] / 1000.0) - t0)
+        try:
+            prediction = self.trajectory.predict_from_world_points(
+                positions_m,
+                times_s,
+                wicket_x_m=impact["along_mm"] / 1000.0,
+                stump_half_width_m=10.0,
+                stump_height_m=2.0,
+                horizon_s=0.8,
+            )
+        except ValueError:
+            return None
+
+        if prediction.wicket_point is not None:
+            return prediction.wicket_point.z * 1000.0
+        nearest = min(prediction.points, key=lambda point: abs(point.x - (impact["along_mm"] / 1000.0)), default=None)
+        return None if nearest is None else nearest.z * 1000.0
 
     def build_decision(
         self,
@@ -146,7 +208,7 @@ class DRSDecisionService:
         camera_id = int(main.get("camera_id", 0)) + 1
         pitch_path = self.tracks_to_pitch_path(fused_tracks or main.get("tracking_points", []), camera_id)
         cal_score, cal_reason, calibrated = self.calibration_quality()
-        bounce = self.estimate_bounce(pitch_path) if pitch_path else None
+        bounce = self.calibrated_pixel_point(main.get("bounce_point_px"), camera_id) or (self.estimate_bounce(pitch_path) if pitch_path else None)
         impact = self.estimate_impact(pitch_path, bounce, main.get("impact_point_px"), camera_id)
         tracking_quality = float(np.mean([cam.get("confidence", 0.0) for cam in camera_results])) if camera_results else 0.0
         stump_prob, extension = self.stump_hit_probability(pitch_path, bounce)
@@ -156,7 +218,7 @@ class DRSDecisionService:
             proposed = "REVIEW INCONCLUSIVE"
             gate_confidence = tracking_quality
         else:
-            impact_height_mm = 350.0 if impact["along_mm"] > (bounce["along_mm"] + 120) else 520.0
+            impact_height_mm = self.estimate_impact_height_mm(pitch_path, impact)
             lbw = self.lbw.evaluate(
                 bounce["lateral_mm"],
                 impact["lateral_mm"],

@@ -151,7 +151,7 @@ class SingleBallByteTracker:
         if not self.initialized:
             return 0.0, 0.0, 0.0, 0.0
         state = self.kalman.predict()
-        return float(state[0]), float(state[1]), float(state[2]), float(state[3])
+        return float(state[0, 0]), float(state[1, 0]), float(state[2, 0]), float(state[3, 0])
 
     def _associate(
         self,
