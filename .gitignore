@@ -46,3 +46,9 @@ logs/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+12345/
+training/images/
+training/labels/
+training/review/
+data/electron-user-data/
+data/training_smoke/
