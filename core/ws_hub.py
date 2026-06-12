@@ -21,10 +21,10 @@ class WSBroadcastHub:
         self._lock = asyncio.Lock()
 
     async def connect(self, channel: str, websocket: WebSocket) -> None:
-        if channel not in self._clients:
-            raise ValueError(f"Unknown channel: {channel}")
         await websocket.accept()
         async with self._lock:
+            if channel not in self._clients:
+                self._clients[channel] = set()
             self._clients[channel].add(websocket)
         log.info("[WS] Client connected to /ws/{}", channel)
 
@@ -54,3 +54,7 @@ class WSBroadcastHub:
         if channel:
             return len(self._clients.get(channel, set()))
         return sum(len(items) for items in self._clients.values())
+
+    @staticmethod
+    def job_channel(job_id: str) -> str:
+        return f"job/{job_id}"

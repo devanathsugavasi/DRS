@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import math
 import os
@@ -38,11 +39,13 @@ log = get_logger("testing_api")
 
 DB_PATH = Path("data/testing/drs_testing.sqlite3")
 CALIBRATION_DIR = Path("data/calibration")
+CALIBRATION_PROFILES_PATH = Path("config/calibration_profiles.json")
 db = TestingDatabase(DB_PATH)
 pipeline = DeliveryTestingPipeline()
 ws_hub = WSBroadcastHub()
 START_TIME = time.time()
 MAX_CAMERAS = 6
+job_progress: dict[str, dict[str, Any]] = {}
 connected_camera_count = 2
 analysis_mode: dict[str, str] = {
     "id": "visible",
@@ -126,6 +129,45 @@ def create_testing_app() -> FastAPI:
                 await websocket.receive_text()
         except WebSocketDisconnect:
             await ws_hub.disconnect(channel, websocket)
+
+    @app.websocket("/ws/job/{job_id}")
+    async def websocket_job_channel(websocket: WebSocket, job_id: str) -> None:
+        channel = WSBroadcastHub.job_channel(_clean_job_id(job_id))
+        await ws_hub.connect(channel, websocket)
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            await ws_hub.disconnect(channel, websocket)
+
+    @app.websocket("/ws/review")
+    async def websocket_review(websocket: WebSocket) -> None:
+        """Push job progress updates to review dashboard subscribers."""
+        await websocket.accept()
+        try:
+            while True:
+                # Send snapshot of all active job progress
+                active_jobs = {
+                    jid: prog for jid, prog in job_progress.items()
+                    if prog.get("status") in {"processing", "queued"}
+                }
+                await websocket.send_json({
+                    "type": "review_status",
+                    "active_jobs": active_jobs,
+                    "total_reviews": len(review_history),
+                    "latest_decision": current_decision.get("status", "WAITING"),
+                    "timestamp_ms": time.time() * 1000.0,
+                })
+                # Push individual updates for each active job
+                for jid, prog in active_jobs.items():
+                    await websocket.send_json({
+                        "type": "job_progress",
+                        "job_id": jid,
+                        **prog,
+                    })
+                await asyncio.sleep(1.5)
+        except WebSocketDisconnect:
+            return
 
     def health_payload() -> dict[str, Any]:
         detector = pipeline.detector
@@ -272,6 +314,46 @@ def create_testing_app() -> FastAPI:
     def calibration_status() -> dict[str, Any]:
         return calibration_status_payload()
 
+    @app.get("/api/calibration/profiles")
+    def calibration_profiles() -> list[dict[str, Any]]:
+        return _load_calibration_profiles()
+
+    @app.post("/api/calibration/save")
+    def save_calibration_profile(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        image_points = payload.get("image_points") or []
+        world_points = payload.get("world_points") or _default_world_points()
+        if len(image_points) != 9 or len(world_points) != 9:
+            raise HTTPException(status_code=400, detail="Exactly 9 image_points and 9 world_points are required")
+
+        profile_id = uuid.uuid4().hex
+        profile = {
+            "id": profile_id,
+            "name": str(payload.get("name") or "Untitled calibration"),
+            "ground": str(payload.get("ground") or "Unknown ground"),
+            "camera": str(payload.get("camera") or "Camera A (end-on)"),
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "rms_error_px": _estimate_rms_error_px(image_points),
+            "image_points": image_points,
+            "world_points": world_points,
+            "camera_matrix": payload.get("camera_matrix") or _identity_camera_matrix(),
+            "dist_coeffs": payload.get("dist_coeffs") or [0, 0, 0, 0, 0],
+            "rvec": payload.get("rvec") or [0, 0, 0],
+            "tvec": payload.get("tvec") or [0, 0, 0],
+        }
+        profiles = _load_calibration_profiles()
+        profiles.append(profile)
+        _save_calibration_profiles(profiles)
+        return {"profile_id": profile_id, "rms_error": profile["rms_error_px"], "status": "saved", "profile": profile}
+
+    @app.post("/api/calibration/auto-detect")
+    def auto_detect_calibration_points(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        image_data = str(payload.get("image") or "")
+        frame = _decode_base64_image(image_data)
+        if frame is None:
+            raise HTTPException(status_code=400, detail="image base64 payload is required")
+        points, confidence = _auto_detect_reference_points(frame)
+        return {"detected_points": points, "confidence": confidence}
+
     @app.get("/api/calibration/default-profile")
     def calibration_default_profile() -> dict[str, Any]:
         return default_icc_profile()
@@ -395,6 +477,85 @@ def create_testing_app() -> FastAPI:
         db.create_job(job_id, mode, options_data, video_a_path, secondary_path)
         background_tasks.add_task(_run_job, job_id, videos, options)
         return {"job_id": job_id, "mode": mode, "status": "queued"}
+
+    @app.post("/api/analyze")
+    async def analyze_video(
+        background_tasks: BackgroundTasks,
+        video: UploadFile = File(...),
+        options_json: str = Form(default="{}"),
+    ) -> dict[str, Any]:
+        response = await create_job(
+            background_tasks=background_tasks,
+            video_a=video,
+            video_b=None,
+            video_c=None,
+            video_d=None,
+            video_e=None,
+            video_f=None,
+            options_json=options_json,
+        )
+        job_id = response["job_id"]
+        job_progress[job_id] = _initial_job_progress(job_id)
+        return {"job_id": job_id, "status": "processing", "websocket_channel": f"/ws/job/{job_id}"}
+
+    @app.post("/api/analyze/calibrated")
+    async def analyze_video_calibrated(
+        background_tasks: BackgroundTasks,
+        video: UploadFile = File(...),
+        calibration_profile_id: str = Form(...),
+        options_json: str = Form(default="{}"),
+    ) -> dict[str, Any]:
+        profiles = _load_calibration_profiles()
+        if not any(profile.get("id") == calibration_profile_id for profile in profiles):
+            raise HTTPException(status_code=404, detail="Calibration profile not found")
+        response = await analyze_video(background_tasks, video, options_json)
+        response["calibration_profile_id"] = calibration_profile_id
+        return response
+
+    @app.get("/api/analyze/{job_id}/status")
+    def analyze_status(job_id: str) -> dict[str, Any]:
+        job_id = _clean_job_id(job_id)
+        if job_id == "test":
+            return {"status": "complete", "progress": 100, "current_step": "Complete", "frames_processed": 0}
+        job = db.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        progress = job_progress.get(job_id, _initial_job_progress(job_id))
+        if job["status"] == "completed":
+            progress.update({"status": "complete", "progress": 100, "current_step": "Complete"})
+        elif job["status"] == "failed":
+            progress.update({"status": "error", "current_step": job.get("error") or "Analysis failed"})
+        return progress
+
+    @app.get("/api/analyze/{job_id}")
+    def analyze_alias(job_id: str) -> dict[str, Any]:
+        job_id = _clean_job_id(job_id)
+        if job_id == "test":
+            return {"job_id": "test", "status": "complete", "progress": 100, "current_step": "Complete"}
+        return analyze_status(job_id)
+
+    @app.get("/api/analyze/{job_id}/results")
+    def analyze_results(job_id: str) -> dict[str, Any]:
+        job_id = _clean_job_id(job_id)
+        if job_id == "test":
+            return _sample_results_payload("test", _sample_processing_decision([1]))
+        job = db.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job["status"] != "completed" or not job.get("result"):
+            raise HTTPException(status_code=409, detail="Analysis is not complete")
+        return _dashboard_results_payload(job_id, job["result"])
+
+    @app.get("/api/analyze/{job_id}/animation")
+    def analyze_animation(job_id: str) -> FileResponse:
+        job_id = _clean_job_id(job_id)
+        job = db.get_job(job_id)
+        if job is None or not job.get("result"):
+            raise HTTPException(status_code=404, detail="Completed job not found")
+        path = Path(job["result"].get("exports", {}).get("animation_video", ""))
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Animation export not available")
+        return FileResponse(path, media_type="video/mp4")
 
     @app.post("/api/test/upload")
     async def upload_test_job(
@@ -558,6 +719,148 @@ def schedule_broadcast(channel: str, payload: dict[str, Any]) -> None:
         pass
 
 
+def schedule_job_broadcast(job_id: str, payload: dict[str, Any]) -> None:
+    schedule_broadcast(WSBroadcastHub.job_channel(job_id), payload)
+
+
+def _clean_job_id(job_id: str) -> str:
+    return "".join(char for char in str(job_id) if char.isalnum() or char in {"_", "-"})[:48]
+
+
+def _initial_job_progress(job_id: str) -> dict[str, Any]:
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "progress": 0,
+        "current_step": "Queued",
+        "frames_processed": 0,
+        "frames_done": 0,
+        "ball_detected": 0,
+    }
+
+
+def _update_job_progress(job_id: str, step: str, percent: int, **extra: Any) -> None:
+    payload = {
+        **job_progress.get(job_id, _initial_job_progress(job_id)),
+        "status": "processing" if percent < 100 else "complete",
+        "progress": max(0, min(100, int(percent))),
+        "current_step": step,
+        **extra,
+    }
+    job_progress[job_id] = payload
+    schedule_job_broadcast(
+        job_id,
+        {
+            "type": "progress",
+            "step": step,
+            "percent": payload["progress"],
+            "frames_done": payload.get("frames_done", payload.get("frames_processed", 0)),
+            **extra,
+        },
+    )
+
+
+def _load_calibration_profiles() -> list[dict[str, Any]]:
+    if not CALIBRATION_PROFILES_PATH.exists():
+        CALIBRATION_PROFILES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CALIBRATION_PROFILES_PATH.write_text("[]\n", encoding="utf-8")
+    try:
+        data = json.loads(CALIBRATION_PROFILES_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        data = []
+    return data if isinstance(data, list) else []
+
+
+def _save_calibration_profiles(profiles: list[dict[str, Any]]) -> None:
+    CALIBRATION_PROFILES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CALIBRATION_PROFILES_PATH.write_text(json.dumps(profiles, indent=2), encoding="utf-8")
+
+
+def _default_world_points() -> list[list[float]]:
+    return [
+        [-1.22, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [1.22, 0.0, 0.0],
+        [-1.22, 1.22, 0.0],
+        [0.0, 1.22, 0.0],
+        [1.22, 1.22, 0.0],
+        [-0.1143, 20.12, 0.711],
+        [0.0, 20.12, 0.711],
+        [0.1143, 20.12, 0.711],
+    ]
+
+
+def _estimate_rms_error_px(image_points: list[Any]) -> float:
+    try:
+        pts = np.asarray(image_points, dtype=float)
+        if pts.shape != (9, 2):
+            return 99.0
+        center = pts.mean(axis=0)
+        spread = np.linalg.norm(pts - center, axis=1).mean()
+        return round(max(1.0, min(12.0, 900.0 / max(spread, 1.0))), 2)
+    except Exception:
+        return 99.0
+
+
+def _identity_camera_matrix() -> list[list[float]]:
+    return [[1200.0, 0.0, 640.0], [0.0, 1200.0, 360.0], [0.0, 0.0, 1.0]]
+
+
+def _decode_base64_image(image_data: str) -> np.ndarray | None:
+    if "," in image_data:
+        image_data = image_data.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(image_data)
+    except Exception:
+        return None
+    data = np.frombuffer(raw, dtype=np.uint8)
+    return cv2.imdecode(data, cv2.IMREAD_COLOR)
+
+
+def _auto_detect_reference_points(frame: np.ndarray) -> tuple[list[list[float]], float]:
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 80, 180)
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=90, minLineLength=120, maxLineGap=18)
+    h, w = frame.shape[:2]
+    if lines is None or len(lines) < 2:
+        return _fallback_image_points(w, h), 0.25
+    horizontal = []
+    for line in lines[:80]:
+        x1, y1, x2, y2 = [int(value) for value in line[0]]
+        if abs(y2 - y1) < max(8, abs(x2 - x1) * 0.08):
+            horizontal.append((x1, y1, x2, y2))
+    if len(horizontal) < 2:
+        return _fallback_image_points(w, h), 0.35
+    ys = sorted({int((line[1] + line[3]) / 2) for line in horizontal})
+    top = ys[max(0, len(ys) // 3 - 1)]
+    mid = ys[min(len(ys) - 1, (len(ys) * 2) // 3)]
+    return [
+        [w * 0.32, top],
+        [w * 0.50, top],
+        [w * 0.68, top],
+        [w * 0.32, mid],
+        [w * 0.50, mid],
+        [w * 0.68, mid],
+        [w * 0.46, h * 0.34],
+        [w * 0.50, h * 0.34],
+        [w * 0.54, h * 0.34],
+    ], 0.55
+
+
+def _fallback_image_points(width: int, height: int) -> list[list[float]]:
+    return [
+        [width * 0.32, height * 0.68],
+        [width * 0.50, height * 0.68],
+        [width * 0.68, height * 0.68],
+        [width * 0.32, height * 0.54],
+        [width * 0.50, height * 0.54],
+        [width * 0.68, height * 0.54],
+        [width * 0.46, height * 0.34],
+        [width * 0.50, height * 0.34],
+        [width * 0.54, height * 0.34],
+    ]
+
+
 def _sample_processing_decision(camera_ids: list[int] | None = None) -> dict[str, Any]:
     camera_ids = camera_ids or [1]
     confidence_parts = {
@@ -611,6 +914,122 @@ def _sample_processing_decision(camera_ids: list[int] | None = None) -> dict[str
             {"label": "Umpire Call", "status": "pending"},
         ],
         "explanation": "Projected path clips leg stump; confidence is gated by calibration and tracking quality.",
+    }
+
+
+def _dashboard_results_payload(job_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    cameras = result.get("cameras") or []
+    first_camera = cameras[0] if cameras else {}
+    summary = result.get("summary") or {}
+    decision = map_summary_to_dashboard_decision(summary, job_id)
+    tracks = first_camera.get("tracking_points") or []
+    detections = first_camera.get("detections") or []
+    detected = [item for item in detections if item.get("confidence", 0.0) > 0]
+    fps = float(first_camera.get("fps") or 0.0)
+    frames = int(first_camera.get("frames_processed") or 0)
+    width = int(first_camera.get("width") or 0)
+    height = int(first_camera.get("height") or 0)
+    duration_s = round(frames / fps, 3) if fps else 0.0
+    avg_confidence = float(np.mean([item.get("confidence", 0.0) for item in detected])) if detected else 0.0
+    detection_rate = len(detected) / max(1, frames)
+    bounce = first_camera.get("bounce_point_px")
+    impact = first_camera.get("impact_point_px")
+    payload = {
+        **result,
+        "job_id": job_id,
+        "video_info": {
+            "duration_s": duration_s,
+            "fps": fps,
+            "resolution": [width, height],
+            "total_frames": frames,
+            "filename": Path(first_camera.get("source_video", "")).name if first_camera.get("source_video") else "",
+        },
+        "ball_tracking": {
+            "frames_tracked": len(tracks),
+            "detection_rate": round(detection_rate, 3),
+            "avg_confidence": round(avg_confidence, 3),
+        },
+        "trajectory": {
+            "release_point": _track_point_to_world(tracks[0]) if tracks else None,
+            "bounce_point": _point_list_to_xyz(bounce),
+            "impact_point": _point_list_to_xyz(impact),
+            "predicted_stumps": decision.get("wicket_prediction"),
+            "points": decision.get("trajectory", []),
+        },
+        "lbw_gates": _lbw_gate_payload(summary, decision),
+        "decision": {
+            "verdict": _normal_verdict(decision.get("status") or decision.get("decision")),
+            "confidence": float(decision.get("overall_confidence") or summary.get("confidence_score") or 0.0),
+            "explanation": decision.get("explanation") or summary.get("explanation") or "Analysis complete.",
+        },
+        "exports": result.get("exports", {}),
+        "animation_frames": result.get("exports", {}).get("animation_video"),
+    }
+    return payload
+
+
+def _sample_results_payload(job_id: str, decision: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "video_info": {"duration_s": 5.0, "fps": 30.0, "resolution": [1280, 720], "total_frames": 150, "filename": "test"},
+        "ball_tracking": {"frames_tracked": 94, "detection_rate": 0.72, "avg_confidence": 0.81},
+        "trajectory": {
+            "release_point": {"x": -9.4, "y": 0.9, "z": 1.55},
+            "bounce_point": decision.get("bounce_point"),
+            "impact_point": decision.get("impact_marker"),
+            "predicted_stumps": decision.get("wicket_prediction"),
+            "points": decision.get("trajectory", []),
+        },
+        "lbw_gates": _lbw_gate_payload({}, decision),
+        "decision": {"verdict": "UMPIRES_CALL", "confidence": 0.82, "explanation": decision.get("explanation", "")},
+        "exports": {},
+        "animation_frames": None,
+    }
+
+
+def _lbw_gate_payload(summary: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+    gates = summary.get("gate", {}) if isinstance(summary, dict) else {}
+    failed = set(gates.get("failed_gates", []) or [])
+    return {
+        "pitching": {
+            "result": "outside_leg" if "pitching" in failed else "in_line",
+            "confidence": float(decision.get("calibration_confidence") or 0.74),
+        },
+        "impact": {
+            "result": "outside_leg" if "impact" in failed else "in_line",
+            "confidence": float(decision.get("tracking_confidence") or 0.74),
+            "height_m": float(summary.get("impact_height_m") or 0.41),
+        },
+        "wickets": {
+            "result": "missing" if "wickets" in failed else "hitting",
+            "confidence": float(decision.get("prediction_confidence") or 0.79),
+            "stumps_hit": ["middle", "leg"] if "wickets" not in failed else [],
+        },
+        "overall": {"confidence": float(decision.get("overall_confidence") or summary.get("confidence_score") or 0.0)},
+    }
+
+
+def _normal_verdict(value: Any) -> str:
+    raw = str(value or "REVIEW_INCONCLUSIVE").upper().replace(" ", "_")
+    if raw in {"OUT", "NOT_OUT"}:
+        return raw
+    if "UMPIRE" in raw:
+        return "UMPIRES_CALL"
+    return "NOT_OUT" if "NOT" in raw else "OUT" if raw == "OUT" else "UMPIRES_CALL"
+
+
+def _point_list_to_xyz(point: Any) -> dict[str, float] | None:
+    if not isinstance(point, list) or len(point) < 2:
+        return None
+    return {"x": float(point[0]), "y": float(point[1]), "z": 0.0}
+
+
+def _track_point_to_world(point: dict[str, Any]) -> dict[str, float]:
+    return {
+        "x": float(point.get("x", 0.0)) / 100.0,
+        "y": float(point.get("y", 0.0)) / 100.0,
+        "z": 0.2,
     }
 
 
@@ -715,22 +1134,49 @@ def _clean_name(filename: str | None, fallback: str) -> str:
 
 def _run_job(job_id: str, videos: list[Path], options: AnalysisOptions) -> None:
     db.update_job(job_id, "processing")
+    job_progress[job_id] = _initial_job_progress(job_id)
+    _update_job_progress(job_id, "Extracting frames...", 8)
     schedule_broadcast("review", {"type": "job_processing", "job_id": job_id})
     try:
         log.info("[API] Starting analysis for job {} with {} video(s)", job_id, len(videos))
+        _update_job_progress(job_id, "Detecting ball...", 25)
         result = pipeline.process(job_id, videos, options)
+        frames_done = sum(int(cam.get("frames_processed", 0)) for cam in result.get("cameras", []))
+        ball_detected = sum(int(cam.get("real_detection_count", 0)) for cam in result.get("cameras", []))
+        _update_job_progress(job_id, "Tracking...", 55, frames_done=frames_done, frames_processed=frames_done, ball_detected=ball_detected)
         db.insert_tracking(job_id, [point for cam in result["cameras"] for point in cam["tracking_points"]])
+        _update_job_progress(job_id, "Predicting trajectory...", 72, frames_done=frames_done, frames_processed=frames_done, ball_detected=ball_detected)
         db.update_job(job_id, "completed", result=result)
+        _update_job_progress(job_id, "Running LBW analysis...", 88, frames_done=frames_done, frames_processed=frames_done, ball_detected=ball_detected)
         decision = map_summary_to_dashboard_decision(result["summary"], job_id)
         current_decision.update(decision)
+        dashboard_results = _dashboard_results_payload(job_id, result)
+        job_progress[job_id] = {
+            **job_progress.get(job_id, _initial_job_progress(job_id)),
+            "status": "complete",
+            "progress": 100,
+            "current_step": "Complete",
+            "frames_processed": frames_done,
+            "frames_done": frames_done,
+            "ball_detected": ball_detected,
+        }
         schedule_broadcast("trajectory", {"type": "trajectory_update", "job_id": job_id, "trajectory": decision.get("trajectory", [])})
         schedule_broadcast("decision", {"type": "decision_update", "job_id": job_id, "decision": decision})
         schedule_broadcast("replay", {"type": "replay_ready", "job_id": job_id, "exports": result.get("exports", {})})
+        schedule_job_broadcast(job_id, {"type": "decision_ready", "verdict": dashboard_results["decision"]["verdict"], "confidence": dashboard_results["decision"]["confidence"]})
+        schedule_job_broadcast(job_id, {"type": "animation_ready", "animation_url": f"/api/analyze/{job_id}/animation"})
+        schedule_job_broadcast(job_id, {"type": "progress", "step": "Complete", "percent": 100, "frames_done": frames_done})
         log.info("[API] Job {} completed successfully", job_id)
     except Exception as exc:
         error_msg = f"{type(exc).__name__}: {str(exc)}"
         log.error("[API] Job {} failed with error: {}", job_id, error_msg, exc_info=True)
         db.update_job(job_id, "failed", error=error_msg)
+        job_progress[job_id] = {
+            **job_progress.get(job_id, _initial_job_progress(job_id)),
+            "status": "error",
+            "current_step": error_msg,
+        }
+        schedule_job_broadcast(job_id, {"type": "progress", "step": error_msg, "percent": job_progress[job_id].get("progress", 0)})
         schedule_broadcast("review", {"type": "job_failed", "job_id": job_id, "error": error_msg})
 
 

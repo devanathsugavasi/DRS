@@ -97,6 +97,7 @@ class BallDetector:
         self.active_model_name = "none"
         self.ball_class_ids = set(BALL_CLASS_IDS)
         self.using_coco_fallback = False
+        self._gpu_failed = False
         self.results_log: list[dict[str, Any]] = []
         default_path = Path(YOLO_MODEL_PATH)
         requested_path = Path(model_path) if model_path else None
@@ -160,14 +161,40 @@ class BallDetector:
 
         input_frame = self.preprocessor(frame) if preprocess else frame
         started = time.perf_counter()
-        raw_results = self.model.predict(
-            source=input_frame,
-            conf=YOLO_CONF_THRESH,
-            iou=YOLO_IOU_THRESH,
-            imgsz=YOLO_IMG_SIZE,
-            device=self.device,
-            verbose=False,
-        )
+
+        device = self.device
+        if self._gpu_failed:
+            device = "cpu"
+
+        try:
+            raw_results = self.model.predict(
+                source=input_frame,
+                conf=YOLO_CONF_THRESH,
+                iou=YOLO_IOU_THRESH,
+                imgsz=YOLO_IMG_SIZE,
+                device=device,
+                verbose=False,
+            )
+        except (RuntimeError, Exception) as exc:
+            exc_name = type(exc).__name__
+            if device != "cpu" and exc_name in {"RuntimeError", "AcceleratorError", "CudaError"}:
+                log.warning("[DRS] GPU inference failed ({}), retrying on CPU", exc)
+                self._gpu_failed = True
+                try:
+                    raw_results = self.model.predict(
+                        source=input_frame,
+                        conf=YOLO_CONF_THRESH,
+                        iou=YOLO_IOU_THRESH,
+                        imgsz=YOLO_IMG_SIZE,
+                        device="cpu",
+                        verbose=False,
+                    )
+                except Exception:
+                    return DetectionResult(frame_id, timestamp_ms, camera_id, [], 0.0)
+            else:
+                log.error("[DRS] CPU inference also failed: {}", exc)
+                return DetectionResult(frame_id, timestamp_ms, camera_id, [], 0.0)
+
         inference_ms = (time.perf_counter() - started) * 1000.0
 
         detections: list[BallDetection] = []

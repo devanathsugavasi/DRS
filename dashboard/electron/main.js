@@ -3,6 +3,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
+const { pathToFileURL } = require("url");
 
 const ENGINE_PORT = 8765;
 const TESTING_PLATFORM_PORT = 5173;
@@ -12,6 +13,19 @@ const DEV_REPO_ROOT = path.resolve(__dirname, "..", "..");
 const BACKEND_ROOT = app.isPackaged ? path.join(process.resourcesPath, "backend") : DEV_REPO_ROOT;
 const TESTING_PLATFORM_ROOT = path.join(DEV_REPO_ROOT, "dashboard", "testing-platform");
 const LOG_PREFIX = "[DRS Electron]";
+
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch("disable-gpu");
+app.commandLine.appendSwitch("disable-gpu-compositing");
+app.commandLine.appendSwitch("disable-gpu-sandbox");
+app.commandLine.appendSwitch("disable-accelerated-2d-canvas");
+app.commandLine.appendSwitch("disable-accelerated-video-decode");
+app.commandLine.appendSwitch("disable-features", "VizDisplayCompositor");
+app.commandLine.appendSwitch("in-process-gpu");
+if (!app.isPackaged) {
+  app.setPath("userData", path.join(DEV_REPO_ROOT, "data", "electron-user-data"));
+  app.setPath("cache", path.join(DEV_REPO_ROOT, "data", "electron-cache"));
+}
 
 let engineProcess = null;
 let testingPlatformProcess = null;
@@ -138,13 +152,13 @@ async function startEngine() {
   try {
     engineProcess = spawn(
       pythonExe,
-      ["-m", "core.api_server", "--host", "127.0.0.1", "--port", String(ENGINE_PORT)],
+      ["drs_app.py", "--testing-api", "--host", "127.0.0.1", "--port", String(ENGINE_PORT)],
       spawnOptions(BACKEND_ROOT)
     );
 
     attachProcessLogging("engine", engineProcess);
     startupState.engine = { status: "started", message: "Backend process launched" };
-    log("Engine spawn ok", { python: pythonExe, module: "core.api_server", cwd: BACKEND_ROOT });
+    log("Engine spawn ok", { python: pythonExe, command: "drs_app.py --testing-api", cwd: BACKEND_ROOT });
     return true;
   } catch (error) {
     startupState.engine = { status: "failed", message: error.message };
@@ -171,8 +185,8 @@ function startTestingPlatform() {
   startupState.testingPlatform = { status: "starting", message: "Launching React dev server (optional)..." };
 
   try {
-    const npmScript = "npm run dev";
-    testingPlatformProcess = spawn(npmScript, [], spawnOptions(TESTING_PLATFORM_ROOT));
+    const npmExe = process.platform === "win32" ? "npm.cmd" : "npm";
+    testingPlatformProcess = spawn(npmExe, ["run", "dev"], spawnOptions(TESTING_PLATFORM_ROOT));
     attachProcessLogging("testing-platform", testingPlatformProcess);
     startupState.testingPlatform = {
       status: "started",
@@ -232,14 +246,17 @@ async function loadDashboardUi() {
   if (!fs.existsSync(indexPath)) {
     throw new Error(`Dashboard UI missing: ${indexPath}`);
   }
-  await mainWindow.loadFile(indexPath);
+  await mainWindow.loadURL(pathToFileURL(indexPath).toString());
 }
 
 async function bootstrap() {
   createWindow();
 
   const engineSpawned = await startEngine();
-  startTestingPlatform();
+  startupState.testingPlatform = {
+    status: "skipped",
+    message: "Separate React testing platform skipped; testing is integrated into the main dashboard.",
+  };
 
   try {
     if (engineSpawned) {
@@ -318,6 +335,7 @@ ipcMain.handle("get-startup-status", async () => startupState);
 ipcMain.handle("get-health", async () => getJson("/api/health"));
 ipcMain.handle("get-system-health", async () => getJson("/api/system/health"));
 ipcMain.handle("get-reviews", async () => getJson("/api/reviews"));
+ipcMain.handle("get-calibration-profiles", async () => getJson("/api/calibration/profiles"));
 ipcMain.handle("get-testing-platform-url", async () => ({
   url: TESTING_PLATFORM_URL,
   status: startupState.testingPlatform.status,
@@ -327,6 +345,7 @@ ipcMain.handle("get-testing-platform-url", async () => ({
 
 ipcMain.handle("request-review", async (_event, data) => postJson("/api/appeal/request", data, true));
 ipcMain.handle("set-analysis-mode", async (_event, data) => postJson("/api/analysis-mode", data));
+ipcMain.handle("save-calibration-profile", async (_event, data) => postJson("/api/calibration/save", data));
 
 function getJson(route) {
   return new Promise((resolve, reject) => {

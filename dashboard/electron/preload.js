@@ -8,7 +8,9 @@ contextBridge.exposeInMainWorld("drs", {
   getStartupStatus: () => ipcRenderer.invoke("get-startup-status"),
   getSystemHealth: () => ipcRenderer.invoke("get-system-health"),
   getReviews: () => ipcRenderer.invoke("get-reviews"),
+  getCalibrationProfiles: () => ipcRenderer.invoke("get-calibration-profiles"),
   getTestingPlatformUrl: () => ipcRenderer.invoke("get-testing-platform-url"),
   setAnalysisMode: (data) => ipcRenderer.invoke("set-analysis-mode", data),
+  saveCalibrationProfile: (data) => ipcRenderer.invoke("save-calibration-profile", data),
   command: (name) => ipcRenderer.invoke("operator-command", name),
 });

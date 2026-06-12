@@ -145,6 +145,17 @@ class ManualPitchCalibrator:
         along_mm = wy * 1000.0
         return lateral_mm, along_mm
 
+    def pitch_mm_to_pixel(self, camera_id: int, lateral_mm: float, along_mm: float) -> tuple[float, float] | None:
+        profile = self.load_profile(camera_id)
+        if profile is None or not profile.homography:
+            return None
+        wx = (lateral_mm / 1000.0) + (self.dimensions.stump_width_m / 2.0)
+        wy = along_mm / 1000.0
+        inv = np.linalg.inv(np.asarray(profile.homography, dtype=np.float64))
+        point = np.array([[[wx, wy]]], dtype=np.float32)
+        mapped = cv2.perspectiveTransform(point, inv.astype(np.float32))
+        return float(mapped[0, 0, 0]), float(mapped[0, 0, 1])
+
     def save_profile(
         self,
         camera_id: int,

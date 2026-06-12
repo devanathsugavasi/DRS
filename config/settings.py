@@ -75,7 +75,16 @@ YOLO_MODEL_PATH = BASE_DIR / "models" / "cricket_ball_yolov8.pt"
 YOLO_CONF_THRESH = 0.35
 YOLO_IOU_THRESH = 0.45
 YOLO_IMG_SIZE = 640
-INFERENCE_DEVICE = "cuda"
+
+def _select_inference_device() -> str:
+    """Auto-detect CUDA GPU; fall back to CPU if unavailable or broken."""
+    try:
+        from utils.inference_device import resolve_device
+        return resolve_device("auto")
+    except Exception:
+        return "cpu"
+
+INFERENCE_DEVICE = _select_inference_device()
 USE_TENSORRT = False
 
 KALMAN_PROCESS_NOISE = 1e-2

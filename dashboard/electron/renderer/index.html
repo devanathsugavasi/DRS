@@ -27,7 +27,7 @@
       <section class="workspace">
         <aside class="left-rail">
           <section class="rail-header">
-            <strong>Camera matrix</strong>
+            <strong id="left-panel-title">Camera matrix</strong>
             <span id="camera-count">0 / 6 connected</span>
           </section>
           <section id="camera-grid" class="camera-grid" aria-label="Adaptive camera and analysis grid"></section>
@@ -93,6 +93,18 @@
             <header><strong>UltraEdge</strong><span>Audio edge</span></header>
             <canvas id="ultraedge-canvas" width="420" height="120"></canvas>
           </section>
+
+          <section class="panel pitch-map-panel">
+            <header><strong>Pitch map</strong><span>Top-down</span></header>
+            <canvas id="pitch-map-canvas" width="420" height="180"></canvas>
+          </section>
+
+          <section class="panel export-actions-panel">
+            <header><strong>Export</strong><span>Analysis files</span></header>
+            <div id="export-panel" class="export-panel">
+              <span class="muted">Exports appear after analysis.</span>
+            </div>
+          </section>
         </aside>
       </section>
 
@@ -133,6 +145,7 @@
         </header>
         <iframe id="testing-platform-frame" title="Embedded React testing platform"></iframe>
       </dialog>
+      <div id="calibration-modal-root" class="calibration-modal-root" aria-live="polite"></div>
     </main>
 
     <script type="module" src="renderer.js"></script>

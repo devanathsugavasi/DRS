@@ -317,20 +317,67 @@ class CameraManager:
             writer.release()
         return out_dir
 
+    def export_replay(self, output_path: str | Path | None = None) -> str:
+        """Export current replay buffer to a video file."""
+        output_path = Path(output_path) if output_path else (RECORDINGS_DIR / f"replay_{timestamp_str()}.mp4")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        writer = SyncVideoWriter(self.camera_ids, output_path.parent)
+        try:
+            replay = self.create_replay()
+            for index in range(replay.total_frames):
+                replay.seek(index)
+                for item in replay.current_frames().values():
+                    writer.write(item)
+        finally:
+            writer.release()
+        return str(output_path)
+
     def health(self) -> dict[int, dict[str, float]]:
         now_ms = time.time() * 1000.0
-        return {
-            camera_id: {
-                "fps": worker.fps_actual,
+        result = {}
+        for camera_id, worker in self.workers.items():
+            fps = worker.fps_actual
+            drops = float(worker.dropped_queue_frames)
+            alive = worker.is_alive()
+            age_ms = max(0.0, now_ms - worker.last_frame_at) if worker.last_frame_at else 999999.0
+            # Health score: 1.0 = perfect, 0.0 = dead
+            health_score = 1.0
+            if not alive:
+                health_score = 0.0
+            else:
+                if fps < 10:
+                    health_score -= 0.3
+                if drops > 100:
+                    health_score -= 0.2
+                if age_ms > 2000:
+                    health_score -= 0.3
+                if worker.synthetic:
+                    health_score -= 0.1
+            result[camera_id] = {
+                "fps": fps,
                 "buffered_frames": float(len(worker.buffer)),
-                "dropped_queue_frames": float(worker.dropped_queue_frames),
+                "dropped_queue_frames": drops,
                 "synthetic": float(worker.synthetic),
                 "reconnect_attempts": float(worker.reconnect_attempts),
-                "last_frame_age_ms": max(0.0, now_ms - worker.last_frame_at) if worker.last_frame_at else 999999.0,
-                "alive": float(worker.is_alive()),
+                "last_frame_age_ms": age_ms,
+                "alive": float(alive),
+                "health_score": max(0.0, min(1.0, health_score)),
+                "connected": float(alive and fps > 0),
+                "last_error": worker.last_error,
             }
-            for camera_id, worker in self.workers.items()
-        }
+        return result
+
+    def restart_camera(self, camera_id: int) -> None:
+        """Restart a specific camera worker."""
+        old_worker = self.workers.get(camera_id)
+        if old_worker is not None:
+            old_worker.stop()
+            old_worker.join(timeout=2.0)
+        buffer_frames = int(BUFFER_SECONDS * TARGET_FPS)
+        new_worker = CameraWorker(camera_id, buffer_frames)
+        self.workers[camera_id] = new_worker
+        new_worker.start()
+        log.info("Camera {} restarted", camera_id)
 
     def _log_sync_delta(self, frames: dict[int, VideoFrame]) -> None:
         if len(frames) < 2:
@@ -345,3 +392,4 @@ class CameraManager:
             log.warning("{} -- camera_sync gate FAIL", message)
         else:
             log.info(message)
+

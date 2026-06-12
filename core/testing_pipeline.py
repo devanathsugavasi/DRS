@@ -18,6 +18,7 @@ from core.ball_detector import DetectionResult, BallDetector
 from core.audio_edge import AudioEdgeDetector
 from core.drs_decision import DRSDecisionService
 from core.hotspot import HotSpotAnalyzer
+from core.pitch_calibration import ManualPitchCalibrator
 from core.readiness import ReadinessGate
 from core.tracking_quality import TrackingQualityAnalyzer
 from core.trajectory import TrajectoryPredictor
@@ -195,6 +196,21 @@ class DeliveryTestingPipeline:
         pixels_per_meter = max(25.0, width / 20.12)
         speed_kmh = (speed_px_s / pixels_per_meter) * 3.6
 
+        # Transform bounce/impact pixel coords to world coords via calibration
+        bounce_world: dict | None = None
+        impact_world: dict | None = None
+        calibrator = ManualPitchCalibrator()
+        profile = calibrator.load_profile(camera_id)
+        if profile and profile.homography:
+            if bounce_point_px:
+                bw = calibrator.pixel_to_pitch_mm(camera_id, float(bounce_point_px[0]), float(bounce_point_px[1]))
+                if bw is not None:
+                    bounce_world = {'lateral_mm': bw[0], 'along_mm': bw[1], 'pixel_x': bounce_point_px[0], 'pixel_y': bounce_point_px[1]}
+            if impact_point_px:
+                iw = calibrator.pixel_to_pitch_mm(camera_id, float(impact_point_px[0]), float(impact_point_px[1]))
+                if iw is not None:
+                    impact_world = {'lateral_mm': iw[0], 'along_mm': iw[1], 'pixel_x': impact_point_px[0], 'pixel_y': impact_point_px[1]}
+
         return {
             "camera_id": camera_id,
             "source_video": str(video_path),
@@ -209,6 +225,8 @@ class DeliveryTestingPipeline:
             "ball_speed_kmh": round(speed_kmh, 2),
             "bounce_point_px": list(bounce_point_px) if bounce_point_px else None,
             "impact_point_px": list(impact_point_px) if impact_point_px else None,
+            "bounce_world": bounce_world,
+            "impact_world": impact_world,
             "screenshots": screenshots,
             "confidence": quality.score,
             "tracking_quality": quality.to_dict(),

@@ -1,5 +1,10 @@
 import * as THREE from "../node_modules/three/build/three.module.js";
 import { OrbitControls } from "../node_modules/three/examples/jsm/controls/OrbitControls.js";
+import { CalibrationModal } from "./components/CalibrationModal.js";
+import { DRSAnimationSequencer } from "./components/DRSAnimationSequencer.js";
+import { ResultsPanel } from "./components/ResultsPanel.js";
+import { StatusPanel } from "./components/StatusPanel.js";
+import { TestingPanel } from "./components/TestingPanel.js";
 
 const API_BASE = "http://localhost:8765";
 const WS_BASE = "ws://localhost:8765";
@@ -13,6 +18,13 @@ const state = {
   replayFrame: 0,
   scene: null,
   replayTimer: null,
+  panelMode: "live",
+  testingPanel: null,
+  statusPanel: null,
+  resultsPanel: null,
+  animationSequencer: null,
+  calibrationModal: null,
+  activeVideoInfo: null,
 };
 
 const timers = {};
@@ -22,6 +34,7 @@ const els = {
   liveIndicator: document.getElementById("live-indicator"),
   modeBanner: document.getElementById("mode-banner"),
   modeToggle: document.getElementById("mode-toggle"),
+  leftPanelTitle: document.getElementById("left-panel-title"),
   cameraPills: document.getElementById("camera-pills"),
   cameraCount: document.getElementById("camera-count"),
   cameraGrid: document.getElementById("camera-grid"),
@@ -60,6 +73,7 @@ const els = {
   testingDialog: document.getElementById("testing-platform-dialog"),
   testingFrame: document.getElementById("testing-platform-frame"),
   closeTesting: document.getElementById("close-testing-platform"),
+  calibrationModalRoot: document.getElementById("calibration-modal-root"),
 };
 
 async function jsonFetch(route, options = {}) {
@@ -129,6 +143,7 @@ function renderMode() {
 }
 
 function renderCameraGrid() {
+  if (state.panelMode !== "live") return;
   const connected = state.cameras.filter((camera) => camera.connected);
   els.cameraCount.textContent = `${connected.length} / ${MAX_CAMERAS} connected`;
   els.cameraPills.innerHTML = state.cameras.map((camera) => (
@@ -182,6 +197,7 @@ function renderAnalysisPanel(slot, connectedCount) {
 }
 
 function refreshCameraFrames() {
+  if (state.panelMode !== "live") return;
   const stamp = Date.now();
   state.cameras.filter((camera) => camera.connected).forEach((camera) => {
     const img = document.getElementById(`camera-${camera.id}`);
@@ -253,6 +269,77 @@ function renderConfidence(decision) {
       <div><i style="width:${Math.round(Number(value || 0) * 100)}%"></i></div>
     </div>
   `).join("");
+}
+
+function initDashboardModules() {
+  state.statusPanel = new StatusPanel(els.leftPanelTitle, els.cameraCount, els.cameraGrid);
+  state.resultsPanel = new ResultsPanel(els);
+  state.animationSequencer = new DRSAnimationSequencer({
+    overlay: els.overlay,
+    title: els.title,
+    frameLabel: els.frameLabel,
+    replayTimeline: els.frameTimeline,
+  });
+  state.calibrationModal = new CalibrationModal(els.calibrationModalRoot);
+}
+
+async function showTestingPanel() {
+  state.panelMode = "testing";
+  els.leftPanelTitle.textContent = "Testing";
+  els.cameraCount.textContent = "Quick Test";
+  state.testingPanel = new TestingPanel(els.cameraGrid, {
+    onVideoInfo: (videoInfo) => {
+      state.activeVideoInfo = videoInfo;
+      state.statusPanel.testing(videoInfo, { step: "Waiting for analysis", percent: 0 });
+    },
+    onProgress: (progress) => {
+      state.statusPanel.testing(state.activeVideoInfo, progress);
+    },
+    onResults: (results) => {
+      renderAnalysisResults(results);
+    },
+  });
+  await state.testingPanel.render();
+}
+
+function renderAnalysisResults(results) {
+  state.panelMode = "results";
+  state.statusPanel.summary(results);
+  state.resultsPanel.render(results);
+  const decision = dashboardDecisionFromResults(results);
+  renderDecision(decision);
+  state.animationSequencer.play(results);
+}
+
+function dashboardDecisionFromResults(results) {
+  const verdict = results.decision?.verdict || "UMPIRES_CALL";
+  const trajectory = results.trajectory?.points || [];
+  return {
+    status: verdict === "NOT_OUT" ? "NOT_OUT" : verdict === "OUT" ? "OUT" : "PROCESSING",
+    outcome: verdict.replace("_", " "),
+    decision: verdict.replace("_", " "),
+    overall_confidence: results.decision?.confidence,
+    ball_confidence: results.ball_tracking?.avg_confidence,
+    tracking_confidence: results.ball_tracking?.detection_rate,
+    calibration_confidence: results.lbw_gates?.pitching?.confidence,
+    prediction_confidence: results.lbw_gates?.wickets?.confidence,
+    model_confidence: results.ball_tracking?.avg_confidence,
+    impact_point: results.trajectory?.impact_point,
+    impact_marker: results.trajectory?.impact_point,
+    bounce_point: results.trajectory?.bounce_point,
+    wicket_zone_status: results.lbw_gates?.wickets?.result || "--",
+    ball_speed_kmh: results.summary?.ball_speed_kmh,
+    trajectory,
+    predicted_extension: trajectory.slice(-3),
+    wicket_prediction: results.trajectory?.predicted_stumps,
+    timeline: [
+      { label: "Release", status: "complete" },
+      { label: "Bounce", status: results.trajectory?.bounce_point ? "complete" : "pending" },
+      { label: "Pad Impact", status: results.trajectory?.impact_point ? "complete" : "pending" },
+      { label: "Stump Line", status: "complete" },
+    ],
+    explanation: results.decision?.explanation,
+  };
 }
 
 async function requestReview() {
@@ -612,7 +699,7 @@ function trackingHealthLabel(cameras) {
 els.requestReview.addEventListener("click", requestReview);
 els.confirmOut.addEventListener("click", () => confirmDecision("OUT"));
 els.confirmNotOut.addEventListener("click", () => confirmDecision("NOT_OUT"));
-els.calibrationButton.addEventListener("click", () => { window.location.href = "calibration.html"; });
+els.calibrationButton.addEventListener("click", () => { state.calibrationModal.open(); });
 els.modeToggle.addEventListener("click", toggleMode);
 els.replayTrajectory.addEventListener("click", replayTrajectory);
 els.resetCamera.addEventListener("click", resetThreeCamera);
@@ -621,20 +708,13 @@ els.replayPause.addEventListener("click", () => replayControl("pause"));
 els.replayBack.addEventListener("click", () => replayControl("step_back"));
 els.replayForward.addEventListener("click", () => replayControl("step_forward"));
 els.replaySpeed.addEventListener("change", () => replayControl("speed", { speed: Number(els.replaySpeed.value) }));
-els.replayExport.addEventListener("click", exportReplay);
-els.frameTimeline.addEventListener("input", () => replayControl("seek", { frame_index: Number(els.frameTimeline.value) }));
-els.testingButton.addEventListener("click", async () => {
-  const payload = window.drs?.getTestingPlatformUrl
-    ? await window.drs.getTestingPlatformUrl()
-    : { url: "http://127.0.0.1:5173", available: false };
-  if (!payload.available) {
-    els.explanation.textContent = payload.message || "Testing platform unavailable. Run npm install in dashboard/testing-platform.";
-    return;
-  }
-  els.testingFrame.src = payload.url;
-  els.testingDialog.showModal();
+els.replayExport.addEventListener("click", () => {
+  if (state.animationSequencer?.results) state.animationSequencer.exportMP4();
+  else exportReplay();
 });
-els.closeTesting.addEventListener("click", () => els.testingDialog.close());
+els.frameTimeline.addEventListener("input", () => replayControl("seek", { frame_index: Number(els.frameTimeline.value) }));
+els.testingButton.addEventListener("click", showTestingPanel);
+els.closeTesting?.addEventListener("click", () => els.testingDialog.close());
 
 window.drs?.onDecision((decision) => renderDecision(decision));
 window.addEventListener("resize", resizeThree);
@@ -652,6 +732,7 @@ window.drs?.onStartupStatus?.((status) => {
   }
 });
 
+initDashboardModules();
 initThree();
 connectWebSockets();
 refreshHealth();

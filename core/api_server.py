@@ -22,6 +22,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from config.settings import CAMERA_IDS, DATA_DIR, RECORDINGS_DIR
 from core.camera_manager import CameraManager, ReplayController, VideoFrame
+from core.integration import DRSPipeline, PipelineState
 from core.pitch_calibration import calibration_status_payload
 from core.synchronization import SyncVerifier
 from utils.logger import get_logger
@@ -64,10 +65,17 @@ class DRSBackend:
         self.analysis_mode = {"id": "visible", "label": "Mode A - visible-spectrum approximation"}
         self.current_decision = self._waiting_decision()
         self.reviews: list[dict] = []
+        # Real-time detection/tracking pipeline integration
+        self.pipeline = DRSPipeline(camera_ids, record=False, detector=None)
+        self.pipeline_state: Optional[PipelineState] = None
+        self._last_detection: Optional[dict] = None
         self._load_session()
 
     def start(self) -> None:
         self.camera_manager.start()
+        # Share camera_manager feeds with the pipeline (avoid double-opening)
+        self.pipeline.camera_manager = self.camera_manager
+        self.pipeline.running = True
         log.info("API backend started with cameras {}", self.camera_ids)
 
     def stop(self) -> None:
@@ -173,10 +181,27 @@ class DRSBackend:
 
     def status_events(self) -> list[dict]:
         health = self.health()
-        return [
+        events: list[dict] = [
             {"type": "camera_health", **health},
             {"type": "sync_report", "sync": health.get("sync", {}), "timestamp_ms": health.get("timestamp_ms")},
         ]
+
+        # ball_detected events from latest pipeline tick
+        if self._last_detection is not None:
+            events.append({"type": "ball_detected", **self._last_detection})
+
+        # trajectory_update from current decision trajectory
+        trajectory = self.current_decision.get("trajectory", [])
+        if trajectory:
+            events.append({"type": "trajectory_update", "trajectory": trajectory, "point_count": len(trajectory)})
+
+        # decision_update with current decision state
+        events.append({"type": "decision_update", "decision": self.current_decision})
+
+        # calibration_status with calibration quality
+        events.append({"type": "calibration_status", "calibration": calibration_status_payload()})
+
+        return events
 
     def camera_status(self) -> dict:
         health = self.camera_manager.health()
@@ -355,6 +380,42 @@ class DRSBackend:
             "explanation": "Awaiting appeal sequence.",
         }
 
+    def _run_pipeline_tick(self) -> None:
+        """Execute one pipeline cycle and store detection/tracking results."""
+        try:
+            state = self.pipeline.process_once()
+            self.pipeline_state = state
+            # Aggregate best detection across cameras for WebSocket broadcast
+            best: dict | None = None
+            for camera_id, pf in state.frames.items():
+                det = pf.detection
+                if det.detected:
+                    candidate = {
+                        "camera_id": camera_id,
+                        "confidence": round(float(det.confidence), 4),
+                        "bbox": list(det.bbox) if det.bbox is not None else None,
+                        "inference_ms": round(float(det.inference_ms), 2),
+                        "frame_id": pf.video_frame.frame_id,
+                        "timestamp_ms": pf.video_frame.timestamp_ms,
+                    }
+                    if best is None or candidate["confidence"] > best["confidence"]:
+                        best = candidate
+            self._last_detection = best
+            # Update trajectory from tracker points if any exist
+            for camera_id, pf in state.frames.items():
+                if pf.track_point is not None:
+                    tracker = self.pipeline.trackers.get(camera_id)
+                    if tracker is not None and tracker.history:
+                        trajectory = [
+                            {"x": float(pt.x), "y": float(pt.y), "z": 0.0}
+                            for pt in tracker.history[-60:]
+                        ]
+                        self.current_decision["trajectory"] = trajectory
+                        break
+        except Exception as exc:
+            log.debug("Pipeline tick skipped: {}", exc)
+            self._last_detection = None
+
     def _sample_decision(self, status: str) -> dict:
         trajectory = [
             {"x": -8.0 + index * 0.45, "y": math.sin(index * 0.16) * 0.18, "z": max(0.05, 1.2 - index * 0.035)}
@@ -435,6 +496,45 @@ def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
     def system_health() -> dict:
         return backend.system_health()
 
+    @app.get("/api/calibration/status")
+    async def calibration_status() -> dict:
+        return calibration_status_payload()
+
+    @app.post("/api/calibration/save")
+    async def save_calibration(body: dict = Body(...)) -> dict:
+        """Save calibration markers from the dashboard UI."""
+        from core.pitch_calibration import ManualPitchCalibrator
+        camera_id = int(body.get("camera_id", 0))
+        markers = body.get("markers", {})
+        image_size = tuple(body.get("image_size", [1280, 720]))
+        required = {"off_stump", "middle_stump", "leg_stump", "bowling_crease", "popping_crease"}
+        if not required.issubset(markers.keys()):
+            raise HTTPException(status_code=422, detail=f"Missing markers: {required - set(markers.keys())}")
+        calibrator = ManualPitchCalibrator()
+        profile = calibrator.save_profile(camera_id, markers, image_size)
+        return {
+            "status": "saved",
+            "camera_id": camera_id,
+            "homography_error_cm": profile.homography_error_cm,
+        }
+
+    @app.post("/api/calibration/verify")
+    async def verify_calibration(body: dict = Body(...)) -> dict:
+        """Test pixel→world transform for a given point."""
+        from core.pitch_calibration import ManualPitchCalibrator
+        camera_id = int(body.get("camera_id", 0))
+        px = float(body.get("x", 0))
+        py = float(body.get("y", 0))
+        calibrator = ManualPitchCalibrator()
+        result = calibrator.pixel_to_pitch_mm(camera_id, px, py)
+        if result is None:
+            return {"error": "No calibration profile for this camera", "camera_id": camera_id}
+        return {
+            "camera_id": camera_id,
+            "pixel": {"x": px, "y": py},
+            "world_mm": {"lateral_mm": result[0], "along_mm": result[1]},
+        }
+
     @app.get("/api/decision/current")
     def decision_current() -> dict:
         return backend.current_decision
@@ -444,14 +544,14 @@ def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
         return backend.confirm_decision(str(payload.get("outcome", "NOT_OUT")).upper())
 
     @app.get("/api/reviews")
-    def reviews() -> dict:
-        return {"reviews": backend.reviews}
+    def reviews() -> list:
+        return backend.reviews
 
     @app.get("/api/reviews/{review_id}")
-    def review(review_id: str) -> dict:
-        for item in backend.reviews:
-            if item["id"] == review_id:
-                return item
+    def review_by_id(review_id: str) -> dict:
+        for review in backend.reviews:
+            if review.get("id") == review_id:
+                return review
         raise HTTPException(status_code=404, detail="Unknown review")
 
     @app.post("/api/appeal/request")
@@ -459,7 +559,24 @@ def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
         camera_ids = payload.get("camera_ids") or backend.camera_ids
         if not isinstance(camera_ids, list):
             raise HTTPException(status_code=400, detail="camera_ids must be a list")
+        # Run full DRS appeal analysis on buffered frames
+        try:
+            analysis = backend.pipeline.run_appeal_analysis()
+            backend.current_decision.update(analysis)
+        except Exception as exc:
+            log.warning("Appeal analysis failed: {}", exc)
         return backend.request_review([int(camera_id) for camera_id in camera_ids])
+
+    @app.get("/api/animation/trajectory")
+    async def get_trajectory_animation() -> dict:
+        """Return trajectory points for 3D visualization."""
+        decision = backend.current_decision
+        trajectory = decision.get("trajectory")
+        return {
+            "trajectory": trajectory,
+            "has_data": trajectory is not None,
+            "decision_status": decision.get("status", "WAITING"),
+        }
 
     @app.post("/api/analysis-mode")
     def analysis_mode(payload: dict = Body(default_factory=dict)) -> dict:
@@ -566,6 +683,8 @@ def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
         await websocket.accept()
         try:
             while True:
+                # Run pipeline tick to update detection/tracking state
+                backend._run_pipeline_tick()
                 for payload in backend.status_events():
                     await websocket.send_json(payload)
                 await asyncio.sleep(0.5)
