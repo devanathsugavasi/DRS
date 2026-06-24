@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DRS Replay — ball tracking</title>
+<style>
+  :root{ --green:#1a7a3a; --red:#c0392b; --amber:#e08a1e; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:-apple-system,Segoe UI,Roboto,sans-serif; background:#101410; color:#eee; }
+  header{ display:flex; align-items:center; gap:16px; padding:10px 16px; background:#171c17; }
+  header h1{ font-size:16px; font-weight:500; margin:0; }
+  header .sp{ flex:1; }
+  header label{ font-size:13px; color:#bbb; cursor:pointer; border:1px solid #444; padding:6px 12px; border-radius:6px; }
+  #stage{ position:relative; width:100%; height:70vh; min-height:420px; background:#3b6d11; overflow:hidden; }
+  #scene{ position:absolute; inset:0; }
+  .bl{ position:absolute; left:0; display:flex; flex-direction:column; gap:8px; z-index:3; }
+  .br{ position:absolute; right:0; z-index:3; }
+  .drsb{ filter:drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
+  .drsb .lab{ background:rgba(245,245,245,.95); color:#1c1c1c; font-size:12px; font-weight:600; letter-spacing:.5px;
+    padding:4px 28px 4px 14px; clip-path:polygon(0 0,100% 0,calc(100% - 13px) 100%,0 100%); }
+  .drsb .val{ color:#fff; font-size:14px; font-weight:600; letter-spacing:.5px;
+    padding:5px 28px 5px 14px; clip-path:polygon(0 0,100% 0,calc(100% - 13px) 100%,0 100%); }
+  .drsb.rt .lab{ padding:4px 14px 4px 28px; clip-path:polygon(13px 0,100% 0,100% 100%,0 100%); }
+  .drsb.rt .val{ padding:5px 14px 5px 28px; clip-path:polygon(13px 0,100% 0,100% 100%,0 100%); }
+  footer{ padding:8px 16px; font-size:12px; color:#999; background:#171c17; }
+  .note{ color:#e0b020; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DRS Replay</h1>
+  <span id="src" style="font-size:12px;color:#9a9;"></span>
+  <span class="sp"></span>
+  <label>Load ball_track.json<input id="file" type="file" accept=".json" style="display:none" /></label>
+</header>
+
+<div id="stage">
+  <div id="scene"></div>
+  <div class="bl" style="top:12px;">
+    <div class="drsb"><div class="lab">ORIGINAL DECISION</div><div id="b-orig" class="val" style="background:var(--green)">NOT OUT</div></div>
+  </div>
+  <div class="bl" style="bottom:14px;">
+    <div class="drsb"><div class="lab">WICKET</div><div id="b-wkt" class="val" style="background:var(--amber)">UMPIRE'S CALL</div></div>
+    <div class="drsb"><div class="lab">IMPACT</div><div id="b-imp" class="val" style="background:var(--red)">IN LINE</div></div>
+    <div class="drsb"><div class="lab">PITCHING</div><div id="b-pit" class="val" style="background:var(--red)">IN LINE</div></div>
+  </div>
+  <div class="br" style="bottom:14px;">
+    <div class="drsb rt"><div class="lab">RESULT</div><div id="b-res" class="val" style="background:var(--green)">REVIEW RETAINED</div></div>
+  </div>
+</div>
+
+<footer>
+  Trajectory from <code>ball_track.json</code> (motion_ball_finder export). Banners from a 2D line heuristic.
+  <span class="note">Single-camera = height is approximate; true 3D / accurate verdicts need synced + calibrated cameras (see docs/CAMERA_SPEC.md).</span>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ---- demo default trajectory (pixel-space, like the tracker exports) ----
+const DEMO = { source:"demo", crop:[884,670], tracking:(function(){
+  const a=[]; for(let i=0;i<=60;i++){ const t=i/60;
+    a.push({frame:i, x:300+ t*150, y:120 + 380*t - 120*Math.sin(t*Math.PI)}); } return a; })() };
+
+let track = DEMO;
+
+function setBanner(id,text,kind){ const e=document.getElementById(id); e.textContent=text;
+  e.style.background = kind==='ok'? 'var(--green)' : kind==='line'? 'var(--red)' : 'var(--amber)'; }
+
+// crude 2D line verdicts from the pixel track (corridor = central x band of the crop)
+function verdicts(tr){
+  const cw = (tr.crop&&tr.crop[0])||884;
+  const lo=cw*0.40, hi=cw*0.60;
+  const pts=tr.tracking; if(!pts.length) return;
+  // pitching = lowest point (max y); impact = last point
+  let bounce=pts[0]; pts.forEach(p=>{ if(p.y>bounce.y) bounce=p; });
+  const impact=pts[pts.length-1];
+  const inLine=x=> x>=lo&&x<=hi;
+  setBanner('b-pit', inLine(bounce.x)?'IN LINE':(bounce.x<lo?'OUTSIDE OFF':'OUTSIDE LEG'), inLine(bounce.x)?'line':'ok');
+  setBanner('b-imp', inLine(impact.x)?'IN LINE':'OUTSIDE LINE', inLine(impact.x)?'line':'ok');
+  // wicket: project last segment to stump line (x near centre => hitting)
+  const n=pts.length, a=pts[Math.max(0,n-4)], b=pts[n-1];
+  const dx=b.x-a.x; const projX=b.x+dx*3;
+  const hit = projX>cw*0.46 && projX<cw*0.54;
+  const edge = projX>cw*0.43 && projX<cw*0.57;
+  setBanner('b-wkt', hit?'HITTING':(edge?"UMPIRE'S CALL":'MISSING'), hit?'line':(edge?'umpire':'ok'));
+  setBanner('b-orig', 'NOT OUT','ok');
+  setBanner('b-res', hit?'OUT — OVERTURNED':'STAYS NOT OUT', hit?'line':'ok');
+  document.getElementById('src').textContent = tr.source? ('source: '+tr.source) : '';
+}
+
+// ---- three.js scene ----
+const host=document.getElementById('scene'); let renderer,scene,cam,ballMesh,tube,frames=[],kk=0;
+function build(tr){
+  host.innerHTML=''; const W=host.clientWidth,H=host.clientHeight;
+  scene=new THREE.Scene();
+  cam=new THREE.PerspectiveCamera(38,W/H,0.1,200);
+  renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+  renderer.setSize(W,H); renderer.setPixelRatio(Math.min(devicePixelRatio,2)); host.appendChild(renderer.domElement);
+  scene.add(new THREE.AmbientLight(0xffffff,0.9));
+  const dl=new THREE.DirectionalLight(0xffffff,0.6); dl.position.set(4,12,10); scene.add(dl);
+  const pitch=new THREE.Mesh(new THREE.PlaneGeometry(3.4,40),new THREE.MeshStandardMaterial({color:0xbfae84,roughness:1}));
+  pitch.rotation.x=-Math.PI/2; pitch.position.set(0,0,-18); scene.add(pitch);
+  function stump(x){const m=new THREE.Mesh(new THREE.CylinderGeometry(0.045,0.045,0.71,14),
+    new THREE.MeshStandardMaterial({color:0xb01818,roughness:0.5})); m.position.set(x,0.355,0); scene.add(m);}
+  [-0.11,0,0.11].forEach(stump);
+  function bail(x){const b=new THREE.Mesh(new THREE.CylinderGeometry(0.018,0.018,0.13,8),
+    new THREE.MeshStandardMaterial({color:0xe8d9b0})); b.rotation.z=Math.PI/2; b.position.set(x,0.72,0); scene.add(b);}
+  bail(-0.055); bail(0.055);
+  const back=new THREE.Mesh(new THREE.PlaneGeometry(60,14),new THREE.MeshBasicMaterial({color:0x2a2f3a}));
+  back.position.set(0,5,-22); scene.add(back);
+
+  // map pixel track -> 3D. x->lateral (m), y->depth toward stumps, height = arc estimate
+  const cw=(tr.crop&&tr.crop[0])||884, ch=(tr.crop&&tr.crop[1])||670;
+  const pts=tr.tracking.map(p=>{
+    const lat=((p.x/cw)-0.5)*1.4;
+    const depth=-9 + 9*(1-(p.y/ch));          // top of crop = far end
+    const yArc=Math.max(0.55, 2.4*(p.y/ch));   // approximate height
+    return new THREE.Vector3(lat, yArc, depth);
+  });
+  frames=pts;
+  if(pts.length>1){
+    const curve=new THREE.CatmullRomCurve3(pts);
+    tube=new THREE.Mesh(new THREE.TubeGeometry(curve,80,0.055,8,false),
+      new THREE.MeshStandardMaterial({color:0xe53935,emissive:0x6a0d0d,roughness:0.4})); scene.add(tube);
+  }
+  ballMesh=new THREE.Mesh(new THREE.SphereGeometry(0.10,18,18),new THREE.MeshStandardMaterial({color:0xd32f2f}));
+  scene.add(ballMesh); kk=0;
+}
+function loop(){
+  if(renderer){
+    kk=(kk+1)%(frames.length+40); const i=Math.min(kk,frames.length-1);
+    if(frames[i]) ballMesh.position.copy(frames[i]);
+    const zoom=2.0+1.0*Math.sin(performance.now()*0.0002);
+    cam.position.set(0,1.7,4.4+zoom); cam.lookAt(0,0.7,-1.5);
+    renderer.render(scene,cam);
+  }
+  requestAnimationFrame(loop);
+}
+function render(tr){ track=tr; build(tr); verdicts(tr); }
+document.getElementById('file').addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f) return; const r=new FileReader();
+  r.onload=()=>{ try{ render(JSON.parse(r.result)); }catch(err){ alert('bad JSON: '+err); } }; r.readAsText(f);
+});
+addEventListener('resize',()=>{ if(track) build(track); });
+render(DEMO); loop();
+</script>
+</body>
+</html>
