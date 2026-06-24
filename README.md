@@ -1,4 +1,4 @@
-# DRS — Cricket Decision Review System (single-camera)
+# DRS — Cricket Decision Review System
 
 A computer-vision pipeline for cricket ball tracking and LBW analysis, built to
 run on real match footage. This repo is **honest about what one fixed camera can
@@ -28,7 +28,7 @@ full multi-camera LBW once DRS-grade footage is available.
 
 ---
 
-## What this does (and doesn't)
+
 
 | Capability | Status | Notes |
 |---|---|---|
