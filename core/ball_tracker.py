@@ -55,11 +55,11 @@ class CricketKalmanFilter:
         self.initialized = True
 
     def predict(self) -> tuple[float, float, float, float]:
-        state = self.filter.predict()
+        state = self.filter.predict().flatten()
         return float(state[0]), float(state[1]), float(state[2]), float(state[3])
 
     def correct(self, x: float, y: float) -> tuple[float, float, float, float]:
-        state = self.filter.correct(np.array([[x], [y]], dtype=np.float32))
+        state = self.filter.correct(np.array([[x], [y]], dtype=np.float32)).flatten()
         return float(state[0]), float(state[1]), float(state[2]), float(state[3])
 
 

@@ -177,7 +177,7 @@ class BallDetector:
             )
         except (RuntimeError, Exception) as exc:
             exc_name = type(exc).__name__
-            if device != "cpu" and exc_name in {"RuntimeError", "AcceleratorError", "CudaError"}:
+            if device != "cpu" and exc_name in {"RuntimeError", "AcceleratorError", "CudaError", "ValueError"}:
                 log.warning("[DRS] GPU inference failed ({}), retrying on CPU", exc)
                 self._gpu_failed = True
                 try:

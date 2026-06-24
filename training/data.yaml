@@ -1,8 +1,7 @@
-path: C:/Users/nikhi/OneDrive/Desktop/DRS/training
+path: /Users/devanath/Desktop/DRS/training
 train: images/train
 val: images/val
 
 nc: 1
 names:
   0: cricket_ball
-

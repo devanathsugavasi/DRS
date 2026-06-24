@@ -52,3 +52,18 @@ training/labels/
 training/review/
 data/electron-user-data/
 data/training_smoke/
+
+# generated analysis artifacts (motion tracker / preview tooling)
+preview_out/
+preview_track/
+deliveries_out/
+training_crops/
+training/good_clips/
+training/dataset_stats.json
+*.tracking.json
+ball_track.json
+/yolo11l.pt
+test_delivery.mp4
+
+# .venv is a symlink alias to venv/
+.venv
