@@ -48,7 +48,7 @@ decisions are honestly marked `REVIEW INCONCLUSIVE` / `UMPIRE'S CALL`.
 
 ---
 
-## Proof it works
+
 
 **Real-time ball-flight demo** (red marker = ball, fading trail = path, top bar =
 live status/fps). Frames from `scripts/realtime_ball_demo.py`:
