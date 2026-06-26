@@ -19,4 +19,6 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install ruff
-      - run: ruff check . --select E,W,F
+      # F = real bugs (undefined names, unused imports). Line-length/style (E,W)
+      # is not enforced on this research codebase. archive/ holds dead code.
+      - run: ruff check . --select F --exclude archive

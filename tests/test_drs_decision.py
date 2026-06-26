@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from core.drs_decision import DRSDecisionService
-from core.pitch_calibration import ManualPitchCalibrator, MARKER_KEYS
+from core.pitch_calibration import ManualPitchCalibrator
 from core.readiness import ReadinessGate
 
 

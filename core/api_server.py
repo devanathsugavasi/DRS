@@ -544,8 +544,8 @@ def create_app(camera_ids: list[int], record: bool = False) -> FastAPI:
         return backend.confirm_decision(str(payload.get("outcome", "NOT_OUT")).upper())
 
     @app.get("/api/reviews")
-    def reviews() -> list:
-        return backend.reviews
+    def reviews() -> dict:
+        return {"reviews": backend.reviews}
 
     @app.get("/api/reviews/{review_id}")
     def review_by_id(review_id: str) -> dict:

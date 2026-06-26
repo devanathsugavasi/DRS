@@ -17,7 +17,7 @@ in the field depends entirely on calibration + frame sync quality.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Sequence
 
 import cv2

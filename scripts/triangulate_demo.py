@@ -20,7 +20,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.triangulation import (
-    STUMP_HEIGHT, PITCH_LENGTH_Y, StereoRig, build_drs3d, look_at,
+    PITCH_LENGTH_Y, StereoRig, build_drs3d, look_at,
     projection_matrix, project,
 )
 
@@ -45,7 +45,7 @@ def ground_truth_delivery() -> tuple[np.ndarray, list[float], int, int]:
 
 def pitch_anchors() -> np.ndarray:
     """Known calibration points on the pitch (stump bases + crease/pitch corners)."""
-    h = STUMP_HALF_WIDTH = 0.1145
+    h = 0.1145
     return np.array([
         [-h, 0.0, 0.0], [0.0, 0.0, 0.0], [h, 0.0, 0.0],            # striker stumps base
         [-h, PITCH_LENGTH_Y, 0.0], [0.0, PITCH_LENGTH_Y, 0.0], [h, PITCH_LENGTH_Y, 0.0],  # bowler stumps

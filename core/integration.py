@@ -102,7 +102,6 @@ class DRSPipeline:
         This is the core 'DRS review' function:
         Detection → Tracking → Calibration → Trajectory → LBW Decision
         """
-        from core.drs_decision import DRSDecisionService
 
         if frames is None:
             # Use last N frames from all cameras
