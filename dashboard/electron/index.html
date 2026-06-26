@@ -29,6 +29,7 @@
 
         <section class="header-actions">
           <span id="backend-status" class="offline">Backend offline</span>
+          <button id="replay3d-open" class="icon-button" title="3D ball-track replay">3D Replay</button>
           <button id="settings-open" class="icon-button" title="Settings">Settings</button>
           <button id="operator-open" class="icon-button" title="Operations">System</button>
           <div class="profile-chip">TO</div>
@@ -240,6 +241,40 @@
         </form>
       </section>
     </main>
+    <div id="replay3d" class="replay3d-hidden">
+      <div class="replay3d-bar">
+        <strong>3D ball-track replay</strong>
+        <span class="replay3d-spacer"></span>
+        <button id="replay3d-close" class="icon-button">Close</button>
+      </div>
+      <iframe id="replay3d-frame" src="../drs_replay.html" title="3D DRS replay"></iframe>
+    </div>
     <script src="renderer.js"></script>
+    <script>
+    (function(){
+      var ov=document.getElementById('replay3d');
+      var fr=document.getElementById('replay3d-frame');
+      var openBtn=document.getElementById('replay3d-open');
+      var closeBtn=document.getElementById('replay3d-close');
+      function txt(id,f){var e=document.getElementById(id);return (e&&e.textContent&&e.textContent.trim())||f;}
+      function activeMode(){var b=document.querySelector('.review-selector button.active,.review-selector button[aria-pressed="true"]');return (b&&(b.dataset.mode||b.textContent.trim()))||'LBW';}
+      function verdicts(){
+        var lbw=/lbw/i.test(activeMode()); var dec=txt('decision-result','NOT OUT');
+        return {
+          original:dec.toUpperCase(),
+          pitching:lbw?txt('pitching-location','IN LINE').toUpperCase():'N/A',
+          impact:lbw?txt('impact-location','IN LINE').toUpperCase():'N/A',
+          wicket:lbw?"UMPIRE'S CALL":'N/A',
+          result:/not out|clear|legal/i.test(dec)?'REVIEW RETAINED':'REVIEW STRUCK DOWN'
+        };
+      }
+      function post(){ if(fr&&fr.contentWindow) fr.contentWindow.postMessage({type:'drs-track',title:activeMode()+' REVIEW',verdicts:verdicts()},'*'); }
+      function openReplay(){ if(!ov)return; ov.classList.remove('replay3d-hidden'); setTimeout(post,350); }
+      function closeReplay(){ if(ov) ov.classList.add('replay3d-hidden'); }
+      if(openBtn) openBtn.addEventListener('click',openReplay);
+      if(closeBtn) closeBtn.addEventListener('click',closeReplay);
+      window.addEventListener('keydown',function(e){ if(e.key==='Escape') closeReplay(); });
+    })();
+    </script>
   </body>
 </html>

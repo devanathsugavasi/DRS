@@ -7,140 +7,188 @@
 <style>
   :root{ --green:#1a7a3a; --red:#c0392b; --amber:#e08a1e; }
   *{ box-sizing:border-box; }
-  body{ margin:0; font-family:-apple-system,Segoe UI,Roboto,sans-serif; background:#101410; color:#eee; }
-  header{ display:flex; align-items:center; gap:16px; padding:10px 16px; background:#171c17; }
-  header h1{ font-size:16px; font-weight:500; margin:0; }
+  body{ margin:0; font-family:-apple-system,Segoe UI,Roboto,sans-serif; background:#0c0f0c; color:#eee; overflow:hidden; }
+  header{ display:flex; align-items:center; gap:16px; padding:10px 16px; background:#141914; }
+  header h1{ font-size:16px; font-weight:500; margin:0; letter-spacing:.5px; }
   header .sp{ flex:1; }
   header label{ font-size:13px; color:#bbb; cursor:pointer; border:1px solid #444; padding:6px 12px; border-radius:6px; }
-  #stage{ position:relative; width:100%; height:70vh; min-height:420px; background:#3b6d11; overflow:hidden; }
+  #stage{ position:relative; width:100%; height:calc(100vh - 84px); min-height:420px; overflow:hidden; }
   #scene{ position:absolute; inset:0; }
-  .bl{ position:absolute; left:0; display:flex; flex-direction:column; gap:8px; z-index:3; }
+  .bl{ position:absolute; left:0; display:flex; flex-direction:column; gap:9px; z-index:3; }
   .br{ position:absolute; right:0; z-index:3; }
-  .drsb{ filter:drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
-  .drsb .lab{ background:rgba(245,245,245,.95); color:#1c1c1c; font-size:12px; font-weight:600; letter-spacing:.5px;
-    padding:4px 28px 4px 14px; clip-path:polygon(0 0,100% 0,calc(100% - 13px) 100%,0 100%); }
-  .drsb .val{ color:#fff; font-size:14px; font-weight:600; letter-spacing:.5px;
-    padding:5px 28px 5px 14px; clip-path:polygon(0 0,100% 0,calc(100% - 13px) 100%,0 100%); }
-  .drsb.rt .lab{ padding:4px 14px 4px 28px; clip-path:polygon(13px 0,100% 0,100% 100%,0 100%); }
-  .drsb.rt .val{ padding:5px 14px 5px 28px; clip-path:polygon(13px 0,100% 0,100% 100%,0 100%); }
-  footer{ padding:8px 16px; font-size:12px; color:#999; background:#171c17; }
+  .drsb{ filter:drop-shadow(0 2px 3px rgba(0,0,0,.5)); }
+  .drsb .lab{ background:rgba(248,248,248,.96); color:#1c1c1c; font-size:12px; font-weight:600; letter-spacing:.6px;
+    padding:5px 30px 5px 16px; clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%); }
+  .drsb .val{ color:#fff; font-size:15px; font-weight:600; letter-spacing:.6px;
+    padding:6px 30px 6px 16px; clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%); }
+  .drsb.rt .lab{ padding:5px 16px 5px 30px; clip-path:polygon(14px 0,100% 0,100% 100%,0 100%); }
+  .drsb.rt .val{ padding:6px 16px 6px 30px; clip-path:polygon(14px 0,100% 0,100% 100%,0 100%); }
+  footer{ padding:7px 16px; font-size:12px; color:#9a9a9a; background:#141914; }
   .note{ color:#e0b020; }
+  #title-strip{ position:absolute; top:12px; left:50%; transform:translateX(-50%); z-index:3;
+    background:rgba(10,12,10,.6); padding:5px 18px; border-radius:20px; font-size:13px; letter-spacing:2px; color:#fff; }
 </style>
 </head>
 <body>
 <header>
-  <h1>DRS Replay</h1>
-  <span id="src" style="font-size:12px;color:#9a9;"></span>
+  <h1>DRS &nbsp;BALL TRACKING</h1>
+  <span id="src" style="font-size:12px;color:#8aa;"></span>
   <span class="sp"></span>
   <label>Load ball_track.json<input id="file" type="file" accept=".json" style="display:none" /></label>
 </header>
 
 <div id="stage">
   <div id="scene"></div>
-  <div class="bl" style="top:12px;">
+  <div id="title-strip">BALL TRACKER</div>
+  <div class="bl" style="top:14px;">
     <div class="drsb"><div class="lab">ORIGINAL DECISION</div><div id="b-orig" class="val" style="background:var(--green)">NOT OUT</div></div>
   </div>
-  <div class="bl" style="bottom:14px;">
+  <div class="bl" style="bottom:16px;">
     <div class="drsb"><div class="lab">WICKET</div><div id="b-wkt" class="val" style="background:var(--amber)">UMPIRE'S CALL</div></div>
     <div class="drsb"><div class="lab">IMPACT</div><div id="b-imp" class="val" style="background:var(--red)">IN LINE</div></div>
     <div class="drsb"><div class="lab">PITCHING</div><div id="b-pit" class="val" style="background:var(--red)">IN LINE</div></div>
   </div>
-  <div class="br" style="bottom:14px;">
+  <div class="br" style="bottom:16px;">
     <div class="drsb rt"><div class="lab">RESULT</div><div id="b-res" class="val" style="background:var(--green)">REVIEW RETAINED</div></div>
   </div>
 </div>
 
 <footer>
-  Trajectory from <code>ball_track.json</code> (motion_ball_finder export). Banners from a 2D line heuristic.
-  <span class="note">Single-camera = height is approximate; true 3D / accurate verdicts need synced + calibrated cameras (see docs/CAMERA_SPEC.md).</span>
+  Trajectory from <code>ball_track.json</code>; banners from a 2D line heuristic.
+  <span class="note">Single-camera height is approximate — true 3D needs synced + calibrated cameras (docs/CAMERA_SPEC.md).</span>
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-// ---- demo default trajectory (pixel-space, like the tracker exports) ----
 const DEMO = { source:"demo", crop:[884,670], tracking:(function(){
   const a=[]; for(let i=0;i<=60;i++){ const t=i/60;
-    a.push({frame:i, x:300+ t*150, y:120 + 380*t - 120*Math.sin(t*Math.PI)}); } return a; })() };
-
-let track = DEMO;
+    a.push({frame:i, x:300+t*150, y:120 + 380*t - 120*Math.sin(t*Math.PI)}); } return a; })() };
+let track = DEMO, VERDICT_OVERRIDE = null;
 
 function setBanner(id,text,kind){ const e=document.getElementById(id); e.textContent=text;
-  e.style.background = kind==='ok'? 'var(--green)' : kind==='line'? 'var(--red)' : 'var(--amber)'; }
+  e.style.background = kind==='ok'?'var(--green)':kind==='line'?'var(--red)':'var(--amber)'; }
 
-// crude 2D line verdicts from the pixel track (corridor = central x band of the crop)
 function verdicts(tr){
-  const cw = (tr.crop&&tr.crop[0])||884;
-  const lo=cw*0.40, hi=cw*0.60;
-  const pts=tr.tracking; if(!pts.length) return;
-  // pitching = lowest point (max y); impact = last point
+  if(VERDICT_OVERRIDE){ const v=VERDICT_OVERRIDE;
+    if(v.original) setBanner('b-orig',v.original, /not/i.test(v.original)?'ok':'line');
+    if(v.pitching) setBanner('b-pit',v.pitching, /in line/i.test(v.pitching)?'line':'ok');
+    if(v.impact) setBanner('b-imp',v.impact, /in line/i.test(v.impact)?'line':'ok');
+    if(v.wicket) setBanner('b-wkt',v.wicket, /hitting/i.test(v.wicket)?'line':/missing/i.test(v.wicket)?'ok':'umpire');
+    if(v.result) setBanner('b-res',v.result, /out|overturn/i.test(v.result)?'line':'ok');
+    document.getElementById('src').textContent = tr.source? ('source: '+tr.source):''; return;
+  }
+  const cw=(tr.crop&&tr.crop[0])||884; const lo=cw*0.40, hi=cw*0.60;
+  const pts=tr.tracking; if(!pts||!pts.length) return;
   let bounce=pts[0]; pts.forEach(p=>{ if(p.y>bounce.y) bounce=p; });
-  const impact=pts[pts.length-1];
-  const inLine=x=> x>=lo&&x<=hi;
+  const impact=pts[pts.length-1]; const inLine=x=>x>=lo&&x<=hi;
   setBanner('b-pit', inLine(bounce.x)?'IN LINE':(bounce.x<lo?'OUTSIDE OFF':'OUTSIDE LEG'), inLine(bounce.x)?'line':'ok');
   setBanner('b-imp', inLine(impact.x)?'IN LINE':'OUTSIDE LINE', inLine(impact.x)?'line':'ok');
-  // wicket: project last segment to stump line (x near centre => hitting)
-  const n=pts.length, a=pts[Math.max(0,n-4)], b=pts[n-1];
-  const dx=b.x-a.x; const projX=b.x+dx*3;
-  const hit = projX>cw*0.46 && projX<cw*0.54;
-  const edge = projX>cw*0.43 && projX<cw*0.57;
+  const n=pts.length, a=pts[Math.max(0,n-4)], b=pts[n-1]; const projX=b.x+(b.x-a.x)*3;
+  const hit=projX>cw*0.46&&projX<cw*0.54, edge=projX>cw*0.43&&projX<cw*0.57;
   setBanner('b-wkt', hit?'HITTING':(edge?"UMPIRE'S CALL":'MISSING'), hit?'line':(edge?'umpire':'ok'));
-  setBanner('b-orig', 'NOT OUT','ok');
+  setBanner('b-orig','NOT OUT','ok');
   setBanner('b-res', hit?'OUT — OVERTURNED':'STAYS NOT OUT', hit?'line':'ok');
-  document.getElementById('src').textContent = tr.source? ('source: '+tr.source) : '';
+  document.getElementById('src').textContent = tr.source? ('source: '+tr.source):'';
 }
 
-// ---- three.js scene ----
-const host=document.getElementById('scene'); let renderer,scene,cam,ballMesh,tube,frames=[],kk=0;
+// ---- broadcast-quality three.js scene ----
+const host=document.getElementById('scene'); let renderer,scene,cam,ballMesh,frames=[],kk=0,shadowMesh;
+function stripeTexture(){
+  const c=document.createElement('canvas'); c.width=64; c.height=512; const g=c.getContext('2d');
+  for(let i=0;i<16;i++){ g.fillStyle=(i%2)?'#7d9442':'#6f8639'; g.fillRect(0,i*32,64,32); }
+  const t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(1,1); return t;
+}
 function build(tr){
   host.innerHTML=''; const W=host.clientWidth,H=host.clientHeight;
-  scene=new THREE.Scene();
-  cam=new THREE.PerspectiveCamera(38,W/H,0.1,200);
+  scene=new THREE.Scene(); scene.fog=new THREE.Fog(0x0c1408, 22, 46);
+  cam=new THREE.PerspectiveCamera(36,W/H,0.1,200);
   renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
-  renderer.setSize(W,H); renderer.setPixelRatio(Math.min(devicePixelRatio,2)); host.appendChild(renderer.domElement);
-  scene.add(new THREE.AmbientLight(0xffffff,0.9));
-  const dl=new THREE.DirectionalLight(0xffffff,0.6); dl.position.set(4,12,10); scene.add(dl);
-  const pitch=new THREE.Mesh(new THREE.PlaneGeometry(3.4,40),new THREE.MeshStandardMaterial({color:0xbfae84,roughness:1}));
-  pitch.rotation.x=-Math.PI/2; pitch.position.set(0,0,-18); scene.add(pitch);
-  function stump(x){const m=new THREE.Mesh(new THREE.CylinderGeometry(0.045,0.045,0.71,14),
-    new THREE.MeshStandardMaterial({color:0xb01818,roughness:0.5})); m.position.set(x,0.355,0); scene.add(m);}
-  [-0.11,0,0.11].forEach(stump);
-  function bail(x){const b=new THREE.Mesh(new THREE.CylinderGeometry(0.018,0.018,0.13,8),
-    new THREE.MeshStandardMaterial({color:0xe8d9b0})); b.rotation.z=Math.PI/2; b.position.set(x,0.72,0); scene.add(b);}
-  bail(-0.055); bail(0.055);
-  const back=new THREE.Mesh(new THREE.PlaneGeometry(60,14),new THREE.MeshBasicMaterial({color:0x2a2f3a}));
-  back.position.set(0,5,-22); scene.add(back);
+  renderer.setSize(W,H); renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+  if(renderer.outputEncoding!==undefined) renderer.outputEncoding=THREE.sRGBEncoding;
+  host.appendChild(renderer.domElement);
 
-  // map pixel track -> 3D. x->lateral (m), y->depth toward stumps, height = arc estimate
+  scene.add(new THREE.HemisphereLight(0xcfe6ff,0x35501f,0.8));
+  const sun=new THREE.DirectionalLight(0xffffff,0.85); sun.position.set(6,16,9);
+  sun.castShadow=true; sun.shadow.mapSize.set(1024,1024); sun.shadow.camera.near=1; sun.shadow.camera.far=60;
+  sun.shadow.camera.left=-12; sun.shadow.camera.right=12; sun.shadow.camera.top=12; sun.shadow.camera.bottom=-12;
+  scene.add(sun);
+
+  const outfield=new THREE.Mesh(new THREE.PlaneGeometry(80,90),
+    new THREE.MeshStandardMaterial({map:stripeTexture(),roughness:1}));
+  outfield.rotation.x=-Math.PI/2; outfield.position.set(0,-0.02,-18); outfield.receiveShadow=true; scene.add(outfield);
+
+  const pitch=new THREE.Mesh(new THREE.PlaneGeometry(3.2,42),
+    new THREE.MeshStandardMaterial({color:0xc2b083,roughness:0.95}));
+  pitch.rotation.x=-Math.PI/2; pitch.position.set(0,0,-18); pitch.receiveShadow=true; scene.add(pitch);
+  const crease=new THREE.Mesh(new THREE.PlaneGeometry(2.9,0.05),new THREE.MeshBasicMaterial({color:0xffffff}));
+  crease.rotation.x=-Math.PI/2; crease.position.set(0,0.011,0.7); scene.add(crease);
+
+  function stump(x){const m=new THREE.Mesh(new THREE.CylinderGeometry(0.046,0.05,0.71,16),
+    new THREE.MeshStandardMaterial({color:0xc21d1d,roughness:0.35,metalness:0.15}));
+    m.position.set(x,0.355,0); m.castShadow=true; scene.add(m);}
+  [-0.11,0,0.11].forEach(stump);
+  function bail(x){const b=new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,0.135,10),
+    new THREE.MeshStandardMaterial({color:0xeaddb8})); b.rotation.z=Math.PI/2; b.position.set(x,0.725,0); b.castShadow=true; scene.add(b);}
+  bail(-0.055); bail(0.055);
+
+  // stadium backdrop: dark stand + faint crowd band
+  const stand=new THREE.Mesh(new THREE.CylinderGeometry(34,34,9,48,1,true,Math.PI*0.75,Math.PI*1.5),
+    new THREE.MeshStandardMaterial({color:0x20242c,side:THREE.BackSide,roughness:1}));
+  stand.position.set(0,4.2,-16); scene.add(stand);
+  const crowd=new THREE.Mesh(new THREE.CylinderGeometry(33.4,33.4,3.4,48,1,true,Math.PI*0.78,Math.PI*1.44),
+    new THREE.MeshStandardMaterial({color:0x3a4250,side:THREE.BackSide,roughness:1})); crowd.position.set(0,3.0,-16); scene.add(crowd);
+
+  // map pixel track -> 3D
   const cw=(tr.crop&&tr.crop[0])||884, ch=(tr.crop&&tr.crop[1])||670;
   const pts=tr.tracking.map(p=>{
-    const lat=((p.x/cw)-0.5)*1.4;
-    const depth=-9 + 9*(1-(p.y/ch));          // top of crop = far end
-    const yArc=Math.max(0.55, 2.4*(p.y/ch));   // approximate height
-    return new THREE.Vector3(lat, yArc, depth);
+    const lat=((p.x/cw)-0.5)*1.45;
+    const depth=-9 + 9*(1-(p.y/ch));
+    const yArc=Math.max(0.55, 2.5*(p.y/ch));
+    return new THREE.Vector3(lat,yArc,depth);
   });
   frames=pts;
   if(pts.length>1){
     const curve=new THREE.CatmullRomCurve3(pts);
-    tube=new THREE.Mesh(new THREE.TubeGeometry(curve,80,0.055,8,false),
-      new THREE.MeshStandardMaterial({color:0xe53935,emissive:0x6a0d0d,roughness:0.4})); scene.add(tube);
+    const tube=new THREE.Mesh(new THREE.TubeGeometry(curve,90,0.055,10,false),
+      new THREE.MeshStandardMaterial({color:0xe53935,emissive:0x5a0a0a,roughness:0.35})); tube.castShadow=true; scene.add(tube);
+    // soft red halo tube
+    const halo=new THREE.Mesh(new THREE.TubeGeometry(curve,90,0.12,10,false),
+      new THREE.MeshBasicMaterial({color:0xff5252,transparent:true,opacity:0.12})); scene.add(halo);
   }
-  ballMesh=new THREE.Mesh(new THREE.SphereGeometry(0.10,18,18),new THREE.MeshStandardMaterial({color:0xd32f2f}));
-  scene.add(ballMesh); kk=0;
+  // wicket-zone disc at stumps
+  const zone=new THREE.Mesh(new THREE.CircleGeometry(0.17,24),
+    new THREE.MeshBasicMaterial({color:0x3a6ad8,transparent:true,opacity:0.4,side:THREE.DoubleSide}));
+  zone.position.set(pts.length?pts[pts.length-1].x*0.4:0,0.6,0.03); scene.add(zone);
+
+  ballMesh=new THREE.Mesh(new THREE.SphereGeometry(0.105,20,20),
+    new THREE.MeshStandardMaterial({color:0xd32f2f,roughness:0.3})); ballMesh.castShadow=true; scene.add(ballMesh);
+  shadowMesh=new THREE.Mesh(new THREE.CircleGeometry(0.12,16),
+    new THREE.MeshBasicMaterial({color:0x000000,transparent:true,opacity:0.28})); shadowMesh.rotation.x=-Math.PI/2; scene.add(shadowMesh);
+  kk=0;
 }
 function loop(){
   if(renderer){
-    kk=(kk+1)%(frames.length+40); const i=Math.min(kk,frames.length-1);
-    if(frames[i]) ballMesh.position.copy(frames[i]);
-    const zoom=2.0+1.0*Math.sin(performance.now()*0.0002);
-    cam.position.set(0,1.7,4.4+zoom); cam.lookAt(0,0.7,-1.5);
+    kk=(kk+1)%(frames.length+45); const i=Math.min(kk,frames.length-1);
+    if(frames[i]){ ballMesh.position.copy(frames[i]); shadowMesh.position.set(frames[i].x,0.012,frames[i].z); }
+    const zoom=2.0+1.0*Math.sin(performance.now()*0.00018);
+    cam.position.set(0.0,1.65,4.5+zoom); cam.lookAt(0,0.72,-1.6);
     renderer.render(scene,cam);
   }
   requestAnimationFrame(loop);
 }
 function render(tr){ track=tr; build(tr); verdicts(tr); }
+
 document.getElementById('file').addEventListener('change',e=>{
   const f=e.target.files[0]; if(!f) return; const r=new FileReader();
-  r.onload=()=>{ try{ render(JSON.parse(r.result)); }catch(err){ alert('bad JSON: '+err); } }; r.readAsText(f);
+  r.onload=()=>{ try{ VERDICT_OVERRIDE=null; render(JSON.parse(r.result)); }catch(err){ alert('bad JSON: '+err); } }; r.readAsText(f);
+});
+// Electron / parent feeds track + optional verdicts via postMessage
+addEventListener('message',ev=>{
+  const d=ev.data||{}; if(d.type!=='drs-track') return;
+  VERDICT_OVERRIDE = d.verdicts||null;
+  if(d.track){ render(d.track); } else { verdicts(track); }
+  if(d.title) document.getElementById('title-strip').textContent=d.title;
 });
 addEventListener('resize',()=>{ if(track) build(track); });
 render(DEMO); loop();
