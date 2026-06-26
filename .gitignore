@@ -67,3 +67,6 @@ test_delivery.mp4
 
 # .venv is a symlink alias to venv/
 .venv
+
+# generated triangulation demo output
+dashboard/triangulated_track.json
