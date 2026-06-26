@@ -17,6 +17,7 @@ full multi-camera LBW once DRS-grade footage is available.
 - [Proof it works](#proof-it-works)
 - [How it works (pipeline)](#how-it-works-pipeline)
 - [Setup](#setup)
+- [Run it on your own video](#run-it-on-your-own-video)
 - [Usage — step by step](#usage--step-by-step)
 - [Inputs & outputs](#inputs--outputs)
 - [Dashboards (web UI)](#dashboards-web-ui)
@@ -29,6 +30,8 @@ full multi-camera LBW once DRS-grade footage is available.
 ---
 
 
+
+## What this does (and doesn't)
 
 | Capability | Status | Notes |
 |---|---|---|
@@ -49,6 +52,8 @@ decisions are honestly marked `REVIEW INCONCLUSIVE` / `UMPIRE'S CALL`.
 ---
 
 
+
+## Proof it works
 
 **Real-time ball-flight demo** (red marker = ball, fading trail = path, top bar =
 live status/fps). Frames from `scripts/realtime_ball_demo.py`:
@@ -110,6 +115,69 @@ cp .env.example .env              # adjust ports / thresholds if needed
 > **First run is slow** — cold import of torch can take minutes on macOS
 > (Gatekeeper scans the binaries). Subsequent runs are <1 s. This is normal;
 > don't kill it. CPU is forced via `INFERENCE_DEVICE=cpu` in `.env`.
+
+---
+
+## Run it on your own video
+
+The fastest path from "I have a clip" to "I see the ball tracked".
+
+### Requirements
+- **Python 3.12+** (this repo uses 3.14), **ffmpeg**, ~4 GB RAM. **CPU only — no GPU needed.**
+- A **video file**: `.mp4`, `.mov`, `.MTS`, `.avi` — anything OpenCV can read.
+- Best results: a **fixed camera** (tripod, not panning) with the **pitch in frame**.
+
+### 1. One-time setup
+```bash
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+```
+> First run is slow (cold torch import, minutes on macOS). After that it's fast.
+
+### 2. Point it at your video
+```bash
+# (a) watch the ball tracked live + save an annotated video
+python scripts/realtime_ball_demo.py --video /path/to/your_clip.mp4 --save out.mp4 --no-display
+
+# (b) auto-find every ball arc / delivery in the whole clip
+python scripts/motion_ball_finder.py find --video /path/to/your_clip.mp4 --out deliveries_out
+
+# (c) export ONE delivery's track (window = start .. start+duration, in seconds)
+python scripts/motion_ball_finder.py export --video /path/to/your_clip.mp4 \
+    --start 12 --duration 4 --out ball_track.json
+```
+
+### 3. See the result
+| Output | What it is | How to view |
+|---|---|---|
+| `out.mp4` | annotated video — red ball + fading trail | open in any video player |
+| `deliveries_out/deliveries.json` | every detected ball arc (time, speed, straightness, delivery/across) | text/JSON |
+| `ball_track.json` | one delivery's track | open `dashboard/drs_replay.html` in a browser → **Load ball_track.json** → 3D broadcast replay |
+
+### What happens to your video
+`crop the fixed pitch area → 3-frame differencing isolates the fast ball → link blobs into arcs → Kalman smooths & bridges gaps → (with calibration) project to the stumps for the LBW call`. Everything runs **locally** — no frames are uploaded anywhere.
+
+### Function options (all CLI flags)
+
+`python scripts/motion_ball_finder.py <mode> …`
+| Mode | Does | Key flags |
+|---|---|---|
+| `scan` | motion energy per second (find the active moments) | `--video`, `--stride` |
+| `track` | annotate one time window → mp4 | `--video`, `--start`, `--duration`, `--out` |
+| `find` | whole clip → all ball arcs + delivery classification | `--video`, `--out`, `--corridor` |
+| `export` | one window → ball-track JSON | `--video`, `--start`, `--duration`, `--out`, `--px-per-m` |
+
+Shared: `--roi "x1,y1,x2,y2"` = crop region as frame fractions (default `0.27,0.28,0.73,0.90`).
+
+`python scripts/realtime_ball_demo.py …`
+| Flag | Meaning |
+|---|---|
+| `--video PATH` / `--camera N` | input: a file, or a live camera index (e.g. `0`) |
+| `--start S --duration D` | process only this window (seconds) |
+| `--save out.mp4` / `--no-display` | write annotated video / run headless |
+| `--roi` · `--trail` · `--gate` | crop region · trail length · Kalman match radius (px) |
+
+Other tools: `preview_detect.py` (eyeball raw detections), `extract_pitch_crops.py` (build a crop dataset), `validate_full_pipeline.py` (full offline LBW run), `triangulate_demo.py` (2-camera 3D triangulation proof).
 
 ---
 
